@@ -10,9 +10,13 @@ see `tools/dist/README.md` for the full pipeline layout.
 
 ## 1. Preconditions
 
-- Root on the build host (the openssh build runs in an Alpine **musl** chroot;
-  `make check-openssh-dist-deps` enforces `id -u` == 0 and the presence of
-  `curl` + `tar`).
+- Root, passwordless sudo, **or** working unprivileged user namespaces on the
+  build host (the openssh build runs in an Alpine **musl** chroot;
+  `make check-openssh-dist-deps` accepts `id -u` == 0, `sudo -n`, or a usable
+  `unshare --user` and the presence of `curl` + `tar`). On kernels that block
+  unprivileged userns (e.g. `kernel.unprivileged_userns_clone=0` or
+  AppArmor's `apparmor_restrict_unprivileged_userns`), run as real root or
+  enable the sysctl.
 - A clean git checkout of this repo, an authenticated `gh` CLI (`gh auth
   login`) and `aws` credentials for the publish step, network access to the
   chroot bases (Alpine mirror) and

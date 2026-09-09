@@ -67,7 +67,9 @@ CA_CERTS_SHA256="6b491dcda951129c80e8d7b0f509253ab640b20653b208d3b0994d893189b3f
 
 # --- containerd + runc (host binaries; R2-Q19) -------------------------------------
 CONTAINERD_VERSION="2.3.5"
-CONTAINERD_URL="https://github.com/containerd/containerd/releases/download/v${CONTAINERD_VERSION}/containerd-${CONTAINERD_VERSION}-linux-${HOST_ARCH}.tar.gz"
+# GitHub auto-generated source archive for the pinned tag (the release-binary
+# tarball would build nothing; the chroot builds from source).
+CONTAINERD_URL="https://github.com/containerd/containerd/archive/refs/tags/v${CONTAINERD_VERSION}.tar.gz"
 CONTAINERD_SHA256=""                        # filled from the tarball by check-dist
 RUNC_VERSION="1.2.9"
 RUNC_URL="https://github.com/opencontainers/runc/releases/download/v${RUNC_VERSION}/runc.${HOST_ARCH}"

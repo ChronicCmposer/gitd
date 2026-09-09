@@ -22,12 +22,17 @@ source "${DIST_DIR}/lib.sh"
 # shellcheck source=tools/dist/chroot.sh
 source "${DIST_DIR}/chroot.sh"
 
-PRODUCT="git"
+export PRODUCT="git"
 OUT_DIR="${1:-${DIST_DIR}/out}"
+# The full apk set this product installs into its rootfs; the content-addressed
+# cache key changes with this list, so a different set gets its own rootfs.
+# git hard-requires zlib for object compression (even with NO_OPENSSL), so
+# zlib-dev/zlib-static are part of the set.
+PRODUCT_APK_DEPS="build-base musl-dev linux-headers zlib-dev zlib-static"
 
 require_cmd curl
 require_cmd tar
-require_root
+require_chroot_priv
 
 # 1. Fetch + verify the pinned source tarball.
 WORK="$(mktemp -d "${DIST_DIR}/.work-git.XXXXXX")"
@@ -38,20 +43,26 @@ download "${GIT_URL}" "${source_tar}" "${GIT_SHA256}"
 # 2. Prepare the alpine chroot with the C toolchain. git needs no external
 #    libraries with these flags; NO_OPENSSL keeps the sha256 object format on
 #    git's internal crypto.
-rootfs="${DIST_DIR}/.cache/alpine-${HOST_ARCH}"
-alpine_setup_rootfs "${rootfs}"
-alpine_install "${rootfs}" build-base musl-dev linux-headers
+rootfs="$(ensure_rootfs alpine)"
+install_deps "${rootfs}" alpine "${PRODUCT_APK_DEPS}"
 
 # 3. Stage the source inside the chroot.
 mkdir -p "${WORK}/src"
 tar -xJf "${source_tar}" -C "${WORK}/src"
+# The cached rootfs may already hold a previous run's staging; wipe it so the
+# build always compiles from the pristine pinned source (a reused rootfs must
+# never see stale source/objects, and cp -a of an existing dir would nest).
+rm -rf "${rootfs}/src" "${rootfs}/out"
 cp -a "${WORK}/src" "${rootfs}/src"
 mkdir -p "${rootfs}/out"
 
 cat > "${WORK}/build.sh" <<EOF
 set -euo pipefail
 cd /src/git-${GIT_VERSION}
-make -j"$(nproc)" \
+# Single make invocation: passing DIFFERENT command-line flags to a second
+# make install would trip git's GIT-CFLAGS/GIT-LDFLAGS rebuild-on-flag-change
+# and relink with the default (non-static) flags.
+make -j"$(nproc)" install \
     prefix=/usr/local \
     NO_PERL=1 \
     NO_GETTEXT=1 \
@@ -59,22 +70,14 @@ make -j"$(nproc)" \
     NO_CURL=1 \
     NO_EXPAT=1 \
     NO_OPENSSL=1 \
+    NO_REGEX=NeedsStartEnd \
     NO_INSTALL_HARDLINKS=1 \
     CFLAGS="-O2 -static" \
-    LDFLAGS="-static"
-make install \
-    prefix=/usr/local \
-    NO_PERL=1 \
-    NO_GETTEXT=1 \
-    NO_TCLTK=1 \
-    NO_CURL=1 \
-    NO_EXPAT=1 \
-    NO_OPENSSL=1 \
-    NO_INSTALL_HARDLINKS=1 \
+    LDFLAGS="-static" \
     DESTDIR=/out
 EOF
 
-chroot_run "${rootfs}" "${WORK}/build.sh" || die "git build failed"
+run_in_rootfs "${rootfs}" "${WORK}/build.sh" || die "git build failed"
 
 # 4. Copy the static tree out of the chroot.
 mkdir -p "${OUT_DIR}"

@@ -87,14 +87,23 @@ check-pinned-go-dist: ## Verify the pinned Go toolchain (2.3).
 	$(DIST)/build-pinned-go.sh
 
 # check-openssh-dist-deps: dependency-hygiene check for the openssh pipeline.
-# Root + curl + tar are the real prerequisites; patch applicability is verified
-# by check-openssh-dist itself (the build applies the patch to the pinned
-# source and fails loudly on a mismatch).
+# Real root, passwordless sudo, or working unprivileged user namespaces (for
+# non-root chroot builds) + curl + tar are the prerequisites; patch
+# applicability is verified by check-openssh-dist itself (the build applies
+# the patch to the pinned source and fails loudly on a mismatch).
 check-openssh-dist-deps: ## Check openssh dist pipeline prerequisites.
-	@test "$$(id -u)" -eq 0 || { echo "gitd: openssh dist builds need root (chroot)"; exit 1; }
+	@if [ "$$(id -u)" -eq 0 ]; then \
+		echo "gitd: openssh dist prerequisites OK (root + curl + tar)"; \
+	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
+		echo "gitd: openssh dist prerequisites OK (passwordless sudo + curl + tar)"; \
+	elif command -v unshare >/dev/null 2>&1 && unshare -Urmpf true >/dev/null 2>&1; then \
+		echo "gitd: openssh dist prerequisites OK (rootless userns + curl + tar)"; \
+	else \
+		echo "gitd: openssh dist builds need root, passwordless sudo, or working unprivileged user namespaces (set kernel.unprivileged_userns_clone=1 / user.max_user_namespaces, or run as root)"; \
+		exit 1; \
+	fi
 	@command -v curl >/dev/null || { echo "gitd: curl is required for the openssh dist build"; exit 1; }
 	@command -v tar >/dev/null || { echo "gitd: tar is required for the openssh dist build"; exit 1; }
-	@echo "gitd: openssh dist prerequisites OK (root + curl + tar)"
 
 # gen-dist-pins: regenerate //:dist_pins.bzl sha256 pins from built tarballs.
 gen-dist-pins: ## Regenerate dist_pins.bzl from the built tarballs.

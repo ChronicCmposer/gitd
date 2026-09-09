@@ -22,12 +22,13 @@ source "${DIST_DIR}/lib.sh"
 # shellcheck source=tools/dist/chroot.sh
 source "${DIST_DIR}/chroot.sh"
 
-PRODUCT="sudo"
+export PRODUCT="sudo"
 OUT_DIR="${1:-${DIST_DIR}/out}"
+PRODUCT_APK_DEPS="build-base musl-dev linux-headers"
 
 require_cmd curl
 require_cmd tar
-require_root
+require_chroot_priv
 
 # 1. Fetch + verify the pinned source tarball.
 WORK="$(mktemp -d "${DIST_DIR}/.work-sudo.XXXXXX")"
@@ -36,13 +37,16 @@ source_tar="${WORK}/sudo-${SUDO_VERSION}.tar.gz"
 download "${SUDO_URL}" "${source_tar}" "${SUDO_SHA256}"
 
 # 2. Prepare the alpine chroot with the C toolchain.
-rootfs="${DIST_DIR}/.cache/alpine-${HOST_ARCH}"
-alpine_setup_rootfs "${rootfs}"
-alpine_install "${rootfs}" build-base musl-dev linux-headers
+rootfs="$(ensure_rootfs alpine)"
+install_deps "${rootfs}" alpine "${PRODUCT_APK_DEPS}"
 
 # 3. Stage the source inside the chroot.
 mkdir -p "${WORK}/src"
 tar -xzf "${source_tar}" -C "${WORK}/src"
+# The cached rootfs may already hold a previous run's staging; wipe it so the
+# build always compiles from the pristine pinned source (a reused rootfs must
+# never see stale source/objects, and cp -a of an existing dir would nest).
+rm -rf "${rootfs}/src" "${rootfs}/out"
 cp -a "${WORK}/src" "${rootfs}/src"
 mkdir -p "${rootfs}/out"
 
@@ -55,23 +59,25 @@ cd /src/sudo-${SUDO_VERSION}
     --disable-shared \
     --enable-static \
     --enable-static-sudoers \
+    --disable-pie \
     --without-pam \
     --without-sssd \
     --without-ldap \
     --without-sendmail \
     --disable-nls \
     CFLAGS="-O2 -static" \
-    LDFLAGS="-static"
+    LDFLAGS="-Wl,-static -no-pie -static-libgcc"
 make -j"$(nproc)"
 make install DESTDIR=/out
 EOF
 
-chroot_run "${rootfs}" "${WORK}/build.sh" || die "sudo build failed"
+run_in_rootfs "${rootfs}" "${WORK}/build.sh" || die "sudo build failed"
 
 # 4. Copy the static binary out of the chroot.
 mkdir -p "${OUT_DIR}"
 stage="$(mktemp -d "${DIST_DIR}/.stage-sudo.XXXXXX")"
 trap 'rm -rf "${WORK}" "${stage}"' EXIT
+mkdir -p "${stage}/usr/local/bin"
 cp -a "${rootfs}/out/usr/local/bin/sudo" "${stage}/usr/local/bin/sudo"
 
 # 5. Verify static linkage, then assemble the deterministic tarball.

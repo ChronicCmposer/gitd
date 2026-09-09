@@ -86,8 +86,9 @@ make mutate-ci    # CI mutation gate (git-diff mode, zero new survivors)
 make coverage     # statement coverage via the pinned rules_go SDK
 ```
 
-Dist / image targets (need root + network for chroot builds, authenticated
-`gh` CLI (`gh auth login`) + aws to publish):
+Dist / image targets (need root or working unprivileged user namespaces +
+network for chroot builds, authenticated `gh` CLI (`gh auth login`) + aws to
+publish):
 
 ```sh
 make check-openssh-dist check-git-dist ...   # build-twice determinism gates

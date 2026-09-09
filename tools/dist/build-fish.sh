@@ -26,12 +26,15 @@ source "${DIST_DIR}/lib.sh"
 # shellcheck source=tools/dist/chroot.sh
 source "${DIST_DIR}/chroot.sh"
 
-PRODUCT="fish"
+export PRODUCT="fish"
 OUT_DIR="${1:-${DIST_DIR}/out}"
+# The full apk set this product installs into its rootfs (cmake + rust + static
+# pcre2); the content-addressed cache key changes with this list.
+PRODUCT_APK_DEPS="build-base musl-dev linux-headers cmake ninja rust cargo pcre2-dev pcre2-static"
 
 require_cmd curl
 require_cmd tar
-require_root
+require_chroot_priv
 
 # 1. Fetch + verify the pinned source tarball.
 WORK="$(mktemp -d "${DIST_DIR}/.work-fish.XXXXXX")"
@@ -40,16 +43,16 @@ source_tar="${WORK}/fish-${FISH_VERSION}.tar.xz"
 download "${FISH_URL}" "${source_tar}" "${FISH_SHA256}"
 
 # 2. Prepare the alpine chroot with cmake + rust + static pcre2.
-rootfs="${DIST_DIR}/.cache/alpine-${HOST_ARCH}"
-alpine_setup_rootfs "${rootfs}"
-alpine_install "${rootfs}" \
-    build-base musl-dev linux-headers \
-    cmake ninja rust cargo \
-    pcre2-dev pcre2-static
+rootfs="$(ensure_rootfs alpine)"
+install_deps "${rootfs}" alpine "${PRODUCT_APK_DEPS}"
 
 # 3. Stage the source inside the chroot.
 mkdir -p "${WORK}/src"
 tar -xJf "${source_tar}" -C "${WORK}/src"
+# The cached rootfs may already hold a previous run's staging; wipe it so the
+# build always compiles from the pristine pinned source (a reused rootfs must
+# never see stale source/objects, and cp -a of an existing dir would nest).
+rm -rf "${rootfs}/src" "${rootfs}/out"
 cp -a "${WORK}/src" "${rootfs}/src"
 mkdir -p "${rootfs}/out"
 
@@ -72,7 +75,7 @@ cmake --build build
 DESTDIR=/out cmake --install build
 EOF
 
-chroot_run "${rootfs}" "${WORK}/build.sh" || die "fish build failed"
+run_in_rootfs "${rootfs}" "${WORK}/build.sh" || die "fish build failed"
 
 # 4. Copy the static tree out of the chroot.
 mkdir -p "${OUT_DIR}"
@@ -81,7 +84,10 @@ trap 'rm -rf "${WORK}" "${stage}"' EXIT
 cp -a "${rootfs}/out/usr/." "${stage}/usr/"
 
 # 5. Verify static linkage, then assemble the deterministic tarball.
-file "${stage}/usr/local/bin/fish" | grep -q "statically linked" \
+# fish links as a static-PIE (Rust crt-static + alpine's default-PIE gcc);
+# "static-pie linked" is fully static too (no dynamic interpreter), so accept
+# both spellings.
+file "${stage}/usr/local/bin/fish" | grep -qE "statically linked|static-pie linked" \
     || die "fish is not statically linked"
 
 asset="${OUT_DIR}/$(product_asset_name fish "${FISH_VERSION}")"

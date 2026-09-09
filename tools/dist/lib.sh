@@ -10,9 +10,19 @@
 set -euo pipefail
 
 # The directory this file lives in (tools/dist); used to find sibling files.
-DIST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Exported so `unshare ... bash -c` children (the namespace wrapper in
+# chroot.sh) can re-source the helpers.
+export DIST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/dist/versions.sh
 source "${DIST_DIR}/versions.sh"
+
+# The dist cache lives in the user's home directory — never /tmp (a small
+# tmpfs that cannot hold rootfs images) and never the repo (where it could be
+# committed by accident). Content-addressed rootfs dirs and shared downloads
+# (minirootfs tarballs, crane, AL2023 exports) live under
+#   ${XDG_CACHE_HOME:-$HOME/.cache}/gitd-dist
+# Export so `unshare ... bash -c` children can reference it.
+export DIST_CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/gitd-dist"
 
 # die prints a fail-fast error to stderr and exits 1. Call as: die "reason"
 die() {
@@ -27,9 +37,25 @@ require_cmd() {
         || die "required command '${cmd}' not found in PATH"
 }
 
-# require_root fails fast because chroot/apk installs need uid 0.
-require_root() {
-    [[ "$(id -u)" -eq 0 ]] || die "must run as root (chroot builds need uid 0); use sudo"
+# require_chroot_priv fails fast when this host cannot provide the
+# root-equivalent privileges the chroot builds need: real uid 0, passwordless
+# sudo, or unprivileged user namespaces. The probes mirror the strimserver
+# privilege-wrapper order used by chroot.sh's ns_enter exactly, so the
+# pre-flight gate can never accept a configuration the build would reject (or
+# vice versa). No temp files are used (the probe output is captured via
+# command substitution, exit status preserved).
+require_chroot_priv() {
+    [[ "${EUID}" -eq 0 ]] && return 0
+    require_cmd unshare
+    require_cmd mount
+    require_cmd chroot
+    if sudo -n true 2>/dev/null; then
+        return 0
+    fi
+    if unshare -Urmpf true 2>/dev/null; then
+        return 0
+    fi
+    die "chroot builds need root, passwordless sudo, or unprivileged user namespaces on this host: enable kernel.unprivileged_userns_clone=1 / sysctl user.max_user_namespaces, or run the build as real root"
 }
 
 # require_network fails fast with a readable message when the mirror is down.
