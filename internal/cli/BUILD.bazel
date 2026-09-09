@@ -29,6 +29,10 @@ go_library(
         "//internal/spool",
         "//internal/sshcmd",
         "//internal/version",
+        "//internal/webhook",
+        "//internal/webhook/plugins/http",
+        "//internal/webhook/plugins/logger",
+        "//internal/webhook/policies/nonfastforward",
     ],
 )
 
@@ -49,5 +53,7 @@ go_test(
         "//internal/socket",
         "//internal/spool",
         "//internal/version",
+        "//internal/webhook",
+        "//internal/webhook/policies/nonfastforward",
     ],
 )

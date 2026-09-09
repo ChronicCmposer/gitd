@@ -427,6 +427,12 @@ func (s *Serve) handleDeliver(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.pluginConfigured(req.PluginID) {
 		s.log.Error("plugin-id not configured", "plugin-id", req.PluginID, "event-id", req.EventID)
+		// Unknown plugin-id is a FINAL failure (R13-Q8): dead-letter the
+		// event so it is never retried or auto-purged. Recovery = re-add the
+		// plugin + SIGHUP + gitd spool replay.
+		if _, err := s.spool.SetState(req.EventID, spool.StateDead); err != nil {
+			s.log.Warn("unknown plugin-id: could not dead-letter event", "event-id", req.EventID, "error", err)
+		}
 		http.Error(w, "plugin-id not configured", http.StatusNotFound)
 		return
 	}

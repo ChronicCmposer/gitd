@@ -1,0 +1,23 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "nonfastforward",
+    srcs = ["nonfastforward.go"],
+    importpath = "github.com/ChronicCmposer/gitd/internal/webhook/policies/nonfastforward",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/gitenv",
+        "//internal/webhook",
+    ],
+)
+
+go_test(
+    name = "nonfastforward_test",
+    srcs = ["nonfastforward_test.go"],
+    embed = [":nonfastforward"],
+    deps = [
+        "//internal/config",
+        "//internal/gitenv",
+        "//internal/webhook",
+    ],
+)

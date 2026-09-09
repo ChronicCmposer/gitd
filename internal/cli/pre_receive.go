@@ -10,13 +10,18 @@ import (
 
 	"github.com/ChronicCmposer/gitd/internal/config"
 	"github.com/ChronicCmposer/gitd/internal/disk"
+	"github.com/ChronicCmposer/gitd/internal/gitenv"
+	"github.com/ChronicCmposer/gitd/internal/webhook"
+	// Policy packages self-register their constructors into
+	// webhook.DefaultPolicies via init (4.1); the blank import keeps them live
+	// in the gitd binary.
+	_ "github.com/ChronicCmposer/gitd/internal/webhook/policies/nonfastforward"
 )
 
 // runPreReceive enforces pre-receive push gates (3.2, 4.4): strict stdin parse
 // (R9-Q7 — a malformed line rejects the push), the statfs disk headroom check
-// at the objects-received chokepoint (R7-Q4), and the policy-evaluation seam.
-// Policy plugins land in Phase 4; an enabled-but-unimplemented policy fails
-// closed (R5-Q1: plugin errors reject the push).
+// at the objects-received chokepoint (R7-Q4), and the policy engine
+// (fail-closed, R5-Q1).
 func runPreReceive(args []string, _, _ io.Writer) error {
 	cfg, rest, err := parseConfigFlag(args)
 	if err != nil {
@@ -34,36 +39,49 @@ func runPreReceive(args []string, _, _ io.Writer) error {
 	if err != nil {
 		return err
 	}
-	p := &preReceive{
-		headroom: disk.Headroom{MinFree: gitd.DiskMinFreeBytes, WarnFree: 1 << 30},
-		enabled:  gitd.Policies.Enabled,
-		log:      log,
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("pre-receive: getwd: %w", err)
 	}
+	git := gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH"))
+	engine := webhook.NewPolicyEngine(webhook.DefaultPolicies, webhook.PolicyDeps{Git: git, RepoDir: cwd})
+	if err := engine.Build(gitd.Policies); err != nil {
+		return err
+	}
+	p := &preReceive{
+		headroom: disk.Headroom{MinFree: gitd.DiskMinFreeBytes, WarnFree: 1 << 30},
+		engine:   engine,
+		log:      log,
+	}
 	return p.Run(cwd, os.Stdin)
 }
 
-// preReceive holds the pre-receive gates; tests build it directly.
+// preReceive holds the pre-receive gates; tests build it directly. A nil
+// engine means no policies are configured (accept).
 type preReceive struct {
 	headroom disk.Headroom
-	enabled  []string
+	engine   *webhook.PolicyEngine
 	log      *slog.Logger
 }
 
 // Run executes the gates in order: strict parse, disk headroom, policies.
 func (p *preReceive) Run(cwd string, stdin io.Reader) error {
-	if _, err := p.parseStrict(stdin); err != nil {
+	lines, err := p.parseStrict(stdin)
+	if err != nil {
 		return err
 	}
 	if err := p.headroom.Check(cwd, p.log); err != nil {
 		return fmt.Errorf("push rejected: %w", err)
 	}
-	if len(p.enabled) > 0 {
-		return fmt.Errorf("push rejected: pre-receive policies not implemented until Phase 4 (enabled: %s)",
-			strings.Join(p.enabled, ", "))
+	if p.engine == nil {
+		return nil
+	}
+	refs := make([]webhook.RefUpdate, len(lines))
+	for i, ln := range lines {
+		refs[i] = webhook.RefUpdate{Old: ln.old, New: ln.new, Ref: ln.ref}
+	}
+	if err := p.engine.Evaluate(refs); err != nil {
+		return fmt.Errorf("push rejected: %w", err)
 	}
 	return nil
 }

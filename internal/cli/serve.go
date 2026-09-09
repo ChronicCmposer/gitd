@@ -18,6 +18,11 @@ import (
 	"github.com/ChronicCmposer/gitd/internal/socket"
 	"github.com/ChronicCmposer/gitd/internal/spool"
 	"github.com/ChronicCmposer/gitd/internal/sshcmd"
+	"github.com/ChronicCmposer/gitd/internal/webhook"
+	// Plugin packages self-register their constructors into webhook.Default
+	// via init (4.1); the blank imports keep them live in the gitd binary.
+	_ "github.com/ChronicCmposer/gitd/internal/webhook/plugins/http"
+	_ "github.com/ChronicCmposer/gitd/internal/webhook/plugins/logger"
 )
 
 // runServe runs the git gateway service (3.1-3.7). One binary, two roles
@@ -83,12 +88,13 @@ func runServe(args []string, _, _ io.Writer) error {
 	}
 	spoolStore := spool.NewStore(spoolDir, time.Now, gitd.Spool.Retention.D(), log)
 	m := mirror.New(store, git, reposRoot, gitd.Storage.Prefix, spoolDir, time.Now, log)
+	deliverer := webhook.NewDeliverer(rt.Webhooks, spoolStore, webhook.Default, time.Now, log)
 
 	srv := serve.New(serve.Config{
 		Mirror:            m,
 		Spool:             spoolStore,
 		Webhooks:          rt.Webhooks,
-		Deliver:           deliverSeam,
+		Deliver:           deliverer.Deliver,
 		ReposRoot:         reposRoot,
 		SocketPath:        socket.DefaultPath,
 		Now:               time.Now,
@@ -98,10 +104,4 @@ func runServe(args []string, _, _ io.Writer) error {
 		ActionsBufferSize: int(gitd.Serve.ActionsBufferSize),
 	})
 	return srv.Run(ctx)
-}
-
-// deliverSeam is the Phase 3 placeholder for the webhook delivery engine
-// (Phase 4.2 wires the plugin pipeline + durable retry bookkeeping here).
-func deliverSeam(_ context.Context, pluginID, eventID string) error {
-	return fmt.Errorf("webhook delivery engine lands in Phase 4 (plugin %s, event %s)", pluginID, eventID)
 }

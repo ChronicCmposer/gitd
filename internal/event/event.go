@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // SchemaVersion is the current envelope schema version. Events carrying a
@@ -47,7 +48,9 @@ type Event struct {
 var ErrNewerSchema = fmt.Errorf("event schema-version newer than supported %d", SchemaVersion)
 
 // Decode parses a strict event from data. Unknown fields, a missing schema
-// version, and unsupported newer schema versions all fail loudly.
+// version, an unsupported newer schema version, an unknown type, and a
+// malformed created-at all fail loudly: err == nil implies a valid event
+// (the FuzzDecodeEvent invariant, R5-Q9).
 func Decode(data []byte) (*Event, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -61,6 +64,14 @@ func Decode(data []byte) (*Event, error) {
 	}
 	if ev.SchemaVersion > SchemaVersion {
 		return nil, fmt.Errorf("%w: got %d", ErrNewerSchema, ev.SchemaVersion)
+	}
+	switch ev.Type {
+	case TypePush, TypeRefCreated, TypeRefDeleted:
+	default:
+		return nil, fmt.Errorf("decode event: unknown type %q", ev.Type)
+	}
+	if _, err := time.Parse(time.RFC3339, ev.CreatedAt); err != nil {
+		return nil, fmt.Errorf("decode event: created-at: %w", err)
 	}
 	return &ev, nil
 }

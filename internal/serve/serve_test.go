@@ -31,9 +31,34 @@ func testGit(t *testing.T) *gitenv.Runner {
 	return gitenv.NewRunner(gitBin, t.TempDir(), os.Getenv("PATH"))
 }
 
+// deliveredLog records deliverer calls race-free (the worker writes from the
+// actions-channel goroutine; tests poll from the test goroutine).
+type deliveredLog struct {
+	mu      sync.Mutex
+	entries []string
+}
+
+func (d *deliveredLog) add(s string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.entries = append(d.entries, s)
+}
+
+func (d *deliveredLog) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.entries)
+}
+
+func (d *deliveredLog) all() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.entries
+}
+
 // testServe wires a Serve with a MemoryStore-backed mirror, a recording
 // deliverer, and the given plugin list.
-func testServe(t *testing.T, plugins []config.PluginConfig) (*Serve, *[]string, *spool.Store) {
+func testServe(t *testing.T, plugins []config.PluginConfig) (*Serve, *deliveredLog, *spool.Store) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reposRoot := t.TempDir()
@@ -44,12 +69,9 @@ func testServe(t *testing.T, plugins []config.PluginConfig) (*Serve, *[]string, 
 	store := spool.NewStore(spoolDir, time.Now, 90*24*time.Hour, log)
 	m := mirror.New(objectstore.NewMemoryStore(), testGit(t), reposRoot, "repos", workDir, time.Now, log)
 
-	var delivered []string
-	var mu sync.Mutex
+	delivered := &deliveredLog{}
 	deliver := func(_ context.Context, pluginID, eventID string) error {
-		mu.Lock()
-		delivered = append(delivered, pluginID+"/"+eventID)
-		mu.Unlock()
+		delivered.add(pluginID + "/" + eventID)
 		return nil
 	}
 	wh := &config.WebhooksConfig{Plugins: plugins}
@@ -65,7 +87,7 @@ func testServe(t *testing.T, plugins []config.PluginConfig) (*Serve, *[]string, 
 		SweepInterval:  0,
 		VerifyInterval: 0,
 	})
-	return srv, &delivered, store
+	return srv, delivered, store
 }
 
 // makeBareRepo creates a bare sha256 repo with one commit at reposRoot/name.git.
@@ -170,8 +192,8 @@ func TestServeDeliver(t *testing.T) {
 	if err := c.Deliver(context.Background(), "p1", "ev1"); err != nil {
 		t.Fatal(err)
 	}
-	if len(*delivered) != 1 || (*delivered)[0] != "p1/ev1" {
-		t.Errorf("deliverer calls = %v", *delivered)
+	if len(delivered.all()) != 1 || delivered.all()[0] != "p1/ev1" {
+		t.Errorf("deliverer calls = %v", delivered.all())
 	}
 }
 
@@ -184,8 +206,8 @@ func TestServeDeliverUnknownPlugin404(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("unknown plugin Deliver err = %v, want 404 (R13-Q8)", err)
 	}
-	if len(*delivered) != 0 {
-		t.Errorf("unknown plugin reached deliverer: %v", *delivered)
+	if len(delivered.all()) != 0 {
+		t.Errorf("unknown plugin reached deliverer: %v", delivered.all())
 	}
 }
 
@@ -234,10 +256,10 @@ func TestServeCatchUpAtStartup(t *testing.T) {
 	runServe(t, srv)
 
 	deadline := time.Now().Add(3 * time.Second)
-	for len(*delivered) == 0 && time.Now().Before(deadline) {
+	for delivered.count() == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(*delivered) == 0 {
+	if delivered.count() == 0 {
 		t.Fatal("catch-up did not deliver the due pending event")
 	}
 }

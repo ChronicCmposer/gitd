@@ -24,6 +24,9 @@ import (
 	"github.com/ChronicCmposer/gitd/internal/objectstore"
 	"github.com/ChronicCmposer/gitd/internal/socket"
 	"github.com/ChronicCmposer/gitd/internal/spool"
+	"github.com/ChronicCmposer/gitd/internal/webhook"
+	// The policy under test self-registers via init (4.1).
+	_ "github.com/ChronicCmposer/gitd/internal/webhook/policies/nonfastforward"
 )
 
 const cliGitBin = "/usr/bin/git"
@@ -268,7 +271,7 @@ func refPair(t *testing.T, repoDir string) (string, string) {
 
 func TestPreReceiveStrictParse(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	p := &preReceive{headroom: diskHeadroomOK(), log: log}
+	p := &preReceive{headroom: diskHeadroomOK(), engine: testPolicyEngine(t, ""), log: log}
 
 	if err := p.Run(t.TempDir(), strings.NewReader("")); err != nil {
 		t.Errorf("zero lines rejected: %v (R11-Q10)", err)
@@ -292,14 +295,44 @@ func TestPreReceiveStrictParse(t *testing.T) {
 	}
 }
 
-func TestPreReceivePolicySeamFailsClosed(t *testing.T) {
+func TestPreReceiveRejectsNonFastForward(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	p := &preReceive{headroom: diskHeadroomOK(), enabled: []string{"non-fast-forward"}, log: log}
-	z := strings.Repeat("0", 64)
-	sha := strings.Repeat("a", 64)
-	if err := p.Run(t.TempDir(), strings.NewReader(z+" "+sha+" refs/heads/main\n")); err == nil {
-		t.Error("enabled policy accepted (fail-closed expected until Phase 4)")
+	repoDir := cliBareRepo(t, t.TempDir(), "r")
+	old, new := refPair(t, repoDir)
+	// Reversing old/new is a non-fast-forward: the guard rejects the push with
+	// a clear stderr message (R5-Q1, R11-Q10).
+	p := &preReceive{headroom: diskHeadroomOK(), engine: testPolicyEngine(t, repoDir), log: log}
+	stdin := fmt.Sprintf("%s %s refs/heads/main\n", new, old)
+	err := p.Run(repoDir, strings.NewReader(stdin))
+	if err == nil || !strings.Contains(err.Error(), "not a fast-forward") {
+		t.Errorf("non-fast-forward push err = %v, want rejection message", err)
 	}
+}
+
+func TestPreReceiveAcceptsFastForward(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	repoDir := cliBareRepo(t, t.TempDir(), "r")
+	old, new := refPair(t, repoDir)
+	p := &preReceive{headroom: diskHeadroomOK(), engine: testPolicyEngine(t, repoDir), log: log}
+	stdin := fmt.Sprintf("%s %s refs/heads/main\n", old, new)
+	if err := p.Run(repoDir, strings.NewReader(stdin)); err != nil {
+		t.Errorf("fast-forward push rejected: %v", err)
+	}
+}
+
+// testPolicyEngine builds a pre-receive engine with the non-fast-forward
+// policy enabled against repoDir (or a throwaway dir when repoDir is nil).
+func testPolicyEngine(t *testing.T, repoDir string) *webhook.PolicyEngine {
+	t.Helper()
+	if repoDir == "" {
+		repoDir = t.TempDir()
+	}
+	git := gitenv.NewRunner(cliGitBin, t.TempDir(), os.Getenv("PATH"))
+	e := webhook.NewPolicyEngine(webhook.DefaultPolicies, webhook.PolicyDeps{Git: git, RepoDir: repoDir})
+	if err := e.Build(config.PoliciesConfig{Enabled: []string{"non-fast-forward"}}); err != nil {
+		t.Fatal(err)
+	}
+	return e
 }
 
 // diskHeadroomOK returns a headroom that never rejects (tests the parse and

@@ -1,0 +1,27 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "http",
+    srcs = ["http.go"],
+    importpath = "github.com/ChronicCmposer/gitd/internal/webhook/plugins/http",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/config",
+        "//internal/event",
+        "//internal/webhook",
+    ],
+)
+
+go_test(
+    name = "http_test",
+    srcs = [
+        "deliver_test.go",
+        "http_test.go",
+    ],
+    embed = [":http"],
+    deps = [
+        "//internal/config",
+        "//internal/event",
+        "//internal/webhook",
+    ],
+)
