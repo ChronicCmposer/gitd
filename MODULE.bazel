@@ -45,10 +45,15 @@ use_repo(go_deps, "com_github_alecthomas_chroma_v2", "com_github_aws_aws_sdk_go_
 # OCI image assembly (2.5). rules_oci 2.3.0 pulls its own toolchain deps
 # (crane/regctl/jq via aspect_bazel_lib, bsd tar). rules_pkg provides
 # pkg_tar for the in-image layers; bazel_features is an explicit dep of the
-# rules_oci toolchain selection.
+# rules_oci toolchain selection. platforms must be declared directly: the
+# root module's //image:image select() reads @platforms//cpu:*. 1.1.0 is the
+# version the resolved dependency graph selects (rules_oci 2.3.0 declares
+# 1.0.0, a transitive dep raises it to 1.1.0), so this direct pin matches the
+# graph exactly and silences the direct-dependency warning.
 bazel_dep(name = "rules_oci", version = "2.3.0")
 bazel_dep(name = "rules_pkg", version = "1.3.0")
 bazel_dep(name = "bazel_features", version = "1.51.0")
+bazel_dep(name = "platforms", version = "1.1.0")
 
 # Pinned distribution artifacts (@openssh_dist, @git_dist, @fish_dist,
 # @sudo_dist, @ca_certs_dist, @containerd_dist, @runc_dist). Pins live in

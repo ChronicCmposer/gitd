@@ -46,8 +46,10 @@ else
     download "${url}" "${asset}" "${GO_SHA256}"
 fi
 
-# Sanity: the staged SDK must extract and run.
-sdk_dir="${OUT_DIR}/go${GO_VERSION}.linux-${HOST_ARCH}"
+# Sanity: the staged SDK must extract and run. The go.dev tarball extracts to
+# a top-level "go/" directory (not "go<version>.linux-<arch>/"), so the SDK
+# root is OUT_DIR/go regardless of version or host arch.
+sdk_dir="${OUT_DIR}/go"
 [[ -x "${sdk_dir}/bin/go" ]] || tar -xzf "${asset}" -C "${OUT_DIR}"
 "${sdk_dir}/bin/go" version
 
