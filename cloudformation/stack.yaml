@@ -1,0 +1,363 @@
+# cloudformation/stack.yaml — git.cmposer.cc personal git server.
+#
+# Self-contained CloudFormation template (opencode-proxy style): VPC, SG,
+# S3 bucket, IAM instance role, and a single t4g.nano AL2023 arm64 instance
+# behind an EIP, all created fresh by this stack. The instance boots via a
+# minimal bootstrap (below) that pulls the gitd deployment bundle from S3 and
+# runs the full boot script (cloudformation/userdata.sh) packaged inside it.
+#
+# Supply-chain integrity (R3-Q2): every artifact the instance installs is
+# pinned to a sha256 CFN parameter (image tarball + containerd/runc) and the
+# deployment bundle itself is pinned by BundleSha256. userdata aborts boot on
+# any mismatch. Certs are client-side crypto that PREDATE the stack (R3-Q3):
+# they are pushed to SSM by deploy.sh (via upload-certs.sh) BEFORE
+# create-stack and never appear in this template.
+#
+# Boot signal: CreationPolicy + cfn-signal (20-min timeout) on the instance.
+# The instance role grants cloudformation:SignalResource so the bootstrap can
+# report success/failure and unblock CREATE_COMPLETE.
+
+AWSTemplateFormatVersion: 2010-09-09
+Description: git.cmposer.cc personal git server (t4g.nano, AL2023 arm64, mTLS browse, PQC SSH)
+
+Parameters:
+  # --- instance ---------------------------------------------------------------
+  AmiId:
+    Description: AL2023 arm64 AMI (resolved from the public SSM parameter)
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  KeyName:
+    Description: EC2 keypair for SSM-host-plane emergency access
+    Type: AWS::EC2::KeyPair::KeyName
+  InstanceType:
+    Description: Instance type (arm64; t4g.nano = 2 vCPU/512MiB, R8-Q4)
+    Type: String
+    Default: t4g.nano
+    AllowedValues: [t4g.nano, t4g.micro]
+  EipAllocationId:
+    Description: Pre-allocated Elastic IP allocation ID (the git.cmposer.cc public IP)
+    Type: String
+
+  # --- deployment bundle (built + uploaded by cloudformation/deploy.sh) --------
+  BucketName:
+    Description: S3 bucket (artifacts + repos + deployment bundles)
+    Type: String
+    Default: git.cmposer.cc
+  BundleS3Key:
+    Description: S3 object key of the deployment bundle (e.g. bundles/gitd-bundle-<sha>.tar.gz)
+    Type: String
+  BundleSha256:
+    Description: sha256 of the deployment bundle; boot aborts on mismatch (R3-Q2)
+    Type: String
+    AllowedPattern: '[0-9a-f]{64}'
+    ConstraintDescription: must be a 64-char lowercase hex sha256
+
+  # --- artifact integrity pins (R3-Q2) -----------------------------------------
+  ImageSha256:
+    Description: sha256 of gitd-container.tar (the OCI image for ctr images import)
+    Type: String
+    AllowedPattern: '[0-9a-f]{64}'
+    ConstraintDescription: must be a 64-char lowercase hex sha256
+  ContainerdSha256:
+    Description: sha256 of the containerd host-binary tarball
+    Type: String
+    AllowedPattern: '[0-9a-f]{64}'
+    ConstraintDescription: must be a 64-char lowercase hex sha256
+  RuncSha256:
+    Description: sha256 of the runc host-binary tarball
+    Type: String
+    AllowedPattern: '[0-9a-f]{64}'
+    ConstraintDescription: must be a 64-char lowercase hex sha256
+  GitdReleaseTag:
+    Description: gitd-dist GitHub release tag holding gitd-container.tar (primary artifact source)
+    Type: String
+    Default: gitd-container
+  RepoRefSha:
+    Description: gitd repo commit SHA that built the image/artifacts (RepoRef-style pin)
+    Type: String
+    AllowedPattern: '[0-9a-f]{40}'
+    ConstraintDescription: must be a 40-char hex git commit SHA
+
+Resources:
+  # --- network: self-contained VPC (10.0.0.0/16) -------------------------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: gitd-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: gitd-igw
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: !Ref "AWS::Region"
+      MapPublicIpOnLaunch: false   # the EIP provides the public address
+      Tags:
+        - Key: Name
+          Value: gitd-subnet
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # --- security: 22 + 443 open; egress narrowed to 443/tcp only (R7-Q6) --------
+  # IMDSv2 (169.254.169.254) and the VPC DNS resolver are link-local and are
+  # NOT filtered by SG egress rules, so they keep working despite the narrow
+  # egress. Every real outbound need is HTTPS (S3, SSM, GitHub, webhooks,
+  # DDNS, dnf-automatic).
+  GitdSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "git.cmposer.cc: SSH (22) + mTLS browse (443); egress 443 only"
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: gitd-sg
+
+  # --- S3 bucket: artifacts + repos + bundles ------------------------------------
+  GitdBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: Enabled                       # noncurrent versions expire 30d (R12-Q9)
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256            # SSE-S3 (R2-Q9)
+      LifecycleConfiguration:
+        Rules:
+          - Id: NoncurrentExpire30d
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+          - Id: AbortIncompleteMultipartUpload7d
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7          # belt-and-braces (R12-Q9)
+
+  # --- IAM instance role -----------------------------------------------------------
+  GitdInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore   # SSM agent bootstrap
+      Policies:
+        - PolicyName: GitdServerPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              # Read-only on dist artifacts + bundles; full access on repos/ mirror.
+              - Sid: S3Artifacts
+                Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !Sub arn:aws:s3:::${BucketName}
+                  - !Sub arn:aws:s3:::${BucketName}/openssh/*
+                  - !Sub arn:aws:s3:::${BucketName}/git/*
+                  - !Sub arn:aws:s3:::${BucketName}/fish/*
+                  - !Sub arn:aws:s3:::${BucketName}/containerd/*
+                  - !Sub arn:aws:s3:::${BucketName}/image/*
+                  - !Sub arn:aws:s3:::${BucketName}/bundles/*
+              # Bundle mirror: Put/List/Get/Delete on repos/ (mirror list/delete/
+              # fetch + weekly verify, R6-Q9/R8-Q2/R8-Q3).
+              - Sid: S3Repos
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:ListBucket]
+                Resource:
+                  - !Sub arn:aws:s3:::${BucketName}
+                  - !Sub arn:aws:s3:::${BucketName}/repos/*
+              # Cert + secret material from SSM (R3-Q3, R12-Q6).
+              - Sid: SsmGetParameter
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/gitd/*
+              # Admin access via Session Manager ONLY (R2-Q9/R2-Q16): no SendCommand.
+              - Sid: SsmStartSession
+                Effect: Allow
+                Action: ssm:StartSession
+                Resource:
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+              # Boot signal (R7-Q6/creation policy).
+              - Sid: CloudFormationSignal
+                Effect: Allow
+                Action: cloudformation:SignalResource
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+
+  GitdInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref GitdInstanceRole
+
+  # --- launch config: BootMode uefi (Secure Boot, R6-Q4) + IMDSv2 required -------
+  GitdLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub gitd-${AWS::StackName}
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        BootMode: uefi                            # Graviton AL2023 enforces UEFI Secure Boot
+        MetadataOptions:
+          HttpTokens: required                    # IMDSv2 only (R7-Q6)
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 1
+        IamInstanceProfile:
+          Arn: !GetAtt GitdInstanceProfile.Arn
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 8
+              VolumeType: gp3
+              Encrypted: true                     # default aws/ebs KMS key (R4-Q7)
+              DeleteOnTermination: true
+        SecurityGroupIds:
+          - !Ref GitdSecurityGroup
+        UserData:
+          Fn::Base64: !Sub
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              exec >/var/log/gitd-userdata.log 2>&1
+
+              # Minimal bootstrap: install AWS helpers, pull the deployment
+              # bundle from S3, verify its sha256 (fail-fast, R3-Q2), then run
+              # the full boot script (cloudformation/userdata.sh) packaged in it.
+              dnf install -y -q aws-cli aws-cfn-bootstrap
+
+              mkdir -p /opt/gitd-bundle
+              aws s3 cp "s3://${BucketName}/${BundleS3Key}" /opt/gitd-bundle/bundle.tar.gz \
+                  --region ${AWS::Region} --only-show-errors
+              echo "${BundleSha256}  /opt/gitd-bundle/bundle.tar.gz" \
+                  | sha256sum -c - || { echo "gitd: bundle sha256 mismatch; aborting boot"; exit 1; }
+              tar -xzf /opt/gitd-bundle/bundle.tar.gz -C /opt/gitd-bundle
+              chmod +x /opt/gitd-bundle/userdata.sh
+
+              STACK_NAME="${AWS::StackName}" \
+              REGION="${AWS::Region}" \
+              RESOURCE_NAME="GitdInstance" \
+              BUCKET="${BucketName}" \
+              IMAGE_SHA256="${ImageSha256}" \
+              CONTAINERD_SHA256="${ContainerdSha256}" \
+              RUNC_SHA256="${RuncSha256}" \
+              GITD_RELEASE_TAG="${GitdReleaseTag}" \
+              /opt/gitd-bundle/userdata.sh
+              status=$?
+
+              /opt/aws/bin/cfn-signal -e "$status" \
+                  --stack "${AWS::StackName}" \
+                  --resource "GitdInstance" \
+                  --region ${AWS::Region}
+              exit "$status"
+            - BucketName: !Ref BucketName
+              BundleS3Key: !Ref BundleS3Key
+              BundleSha256: !Ref BundleSha256
+              ImageSha256: !Ref ImageSha256
+              ContainerdSha256: !Ref ContainerdSha256
+              RuncSha256: !Ref RuncSha256
+              GitdReleaseTag: !Ref GitdReleaseTag
+
+  # --- the instance (boot signal gates CREATE_COMPLETE) ---------------------------
+  GitdInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: [PublicRoute, GitdBucket]
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT20M
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref GitdLaunchTemplate
+        Version: !GetAtt GitdLaunchTemplate.LatestVersionNumber
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: gitd-server
+        - Key: gitd:role
+          Value: git-server
+        - Key: gitd:revision
+          Value: !Ref RepoRefSha
+
+  # --- the Elastic IP (pre-allocated) + association ---------------------------------
+  GitdEipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !Ref EipAllocationId
+      InstanceId: !Ref GitdInstance
+
+Outputs:
+  GitdInstanceId:
+    Description: gitd server instance ID
+    Value: !Ref GitdInstance
+  GitdPublicIp:
+    Description: git.cmposer.cc public IP (the EIP)
+    Value: !Select [0, !Split ["/", !GetAtt GitdInstance.PublicIp]]
+  GitdBucket:
+    Description: S3 bucket
+    Value: !Ref GitdBucket

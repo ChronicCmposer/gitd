@@ -108,5 +108,5 @@ image-container: ## Produce gitd-container.tar for `ctr images import` (R3-Q2).
 	bazel build //image:image
 	$(DIST)/package-image.sh
 
-deploy: ## Deploy the stack via CloudFormation (Phase 4+).
-	@echo "gitd: deploy not yet implemented in this phase"
+deploy: ## Deploy the stack via CloudFormation (Phase 7). Usage: make deploy ARGS="--key-name KP --eip-allocation-id EIP"
+	./cloudformation/deploy.sh $(ARGS)
