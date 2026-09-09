@@ -1,0 +1,15 @@
+# gitd Bazel configuration.
+# See https://bazel.build/run/bazelrc for the full flag reference.
+
+# Show the full test log only when a test fails.
+test --test_output=errors
+
+# Colorize output on terminals.
+build --color=yes
+test --color=yes
+
+# Version stamping (R1-Q11): placeholder for the release pipeline. Link-time
+# version injection (workspace-status.sh + x_defs + --stamp) is wired in the
+# release phase; until then internal/version returns its v0.0.0-devel default.
+# Uncomment when the release pipeline lands:
+# build --stamp

@@ -1,0 +1,43 @@
+"""gitd — personal git server on AWS.
+
+Bazel module definition (bzlmod). Toolchain pins follow the strimserver-proven
+combo: rules_go 0.63.0 + gazelle 0.54.0. External dist artifacts (openssh,
+git, fish, containerd) are declared as checksummed http_archive repos via
+//:dist.bzl; Phase 1 ships only the @openssh_dist placeholder.
+"""
+
+module(
+    name = "gitd",
+    version = "0.0.0",
+)
+
+# Bazel toolchains. rules_go + gazelle combo proven by strimserver.
+bazel_dep(name = "rules_go", version = "0.63.0", repo_name = "io_bazel_rules_go")
+bazel_dep(name = "gazelle", version = "0.54.0", repo_name = "bazel_gazelle")
+
+# The gazelle binary (bazel run @bazel_gazelle//:gazelle) links the skylib
+# BZL language from this plugin repo.
+bazel_dep(name = "bazel_skylib_gazelle_plugin", version = "1.7.1")
+
+# Go toolchain. rules_go's go_sdk.from_file reads the go.mod "go" directive,
+# which for us is the language-version floor "1.26" (not a downloadable SDK
+# version), so pin the concrete SDK explicitly. Keep this aligned with the
+# dev toolchain in go.mod's toolchain line when one is added.
+go_sdk = use_extension("@io_bazel_rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(
+    name = "go_sdk",
+    version = "1.26.5",
+)
+use_repo(go_sdk, "go_sdk")
+
+# Go module dependencies. go_deps reads go.mod/go.sum, so the single source of
+# truth for Go deps is go.mod. The mutesting pin (jonbaldie/go-mutesting/v2
+# v2.7.9, R4-Q1) lives in go.mod from Phase 1; the rules_go-built mutation
+# binary that consumes it lands in Phase 9.
+go_deps = use_extension("@bazel_gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+
+# Pinned distribution artifacts (@openssh_dist placeholder; real pins wired in
+# Phase 2 by tools/dist).
+dist = use_extension("//:dist.bzl", "dist")
+use_repo(dist, "openssh_dist")

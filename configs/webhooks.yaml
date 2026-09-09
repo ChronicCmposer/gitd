@@ -1,0 +1,10 @@
+plugins:
+  - id: my-receiver          # unique plugin id
+    type: http               # http | logger
+    url_template: https://example.com/hook/{repo}   # placeholders: {repo}, {ref}, {event-id}; placeholder values RFC 3986 path-escaped on substitution (R13-Q5)
+    secret_file: /etc/gitd/webhook-secret           # file-path reference (R1-Q4), 0600
+    sync: false              # opt-in: blocks push (POST /v1/deliver, awaits reply, R10-Q2)
+    repos: ["*"]             # glob filter on repo name
+    timeout: 30s             # per-attempt (R2-Q8)
+    retries: 3               # durable retry budget (R8-Q8)
+    insecure_skip_verify: false   # TLS verify on by default (R2-Q8)

@@ -1,0 +1,8 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "browse",
+    srcs = ["browse.go"],
+    importpath = "github.com/ChronicCmposer/gitd/internal/browse",
+    visibility = ["//:__subpackages__"],
+)

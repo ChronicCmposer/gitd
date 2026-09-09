@@ -1,0 +1,35 @@
+# Authoritative key list for the R1-Q3 config protocol (DisallowUnknownFields
+# + fail-fast validate with file path in errors); all keys below except
+# host_allowlist EIP entry are static defaults.
+log:                        # *log/slog (R1-Q2)
+  level: info               # debug | info | warn | error
+  format: text              # text | json
+storage:                    # ObjectStore backend (R6-Q7)
+  type: s3                  # s3 only in v1
+  bucket: git.cmposer.cc
+  region: us-east-2
+  prefix: repos
+tls:                        # file-path references, root:root 0600 (R1-Q4, R6-Q5)
+  cert: /etc/gitd/tls/server.crt
+  key: /etc/gitd/tls/server.key
+  client_ca: /etc/gitd/tls/client-ca.crt
+  revocation_list: /etc/gitd/tls/revoked.crl
+git_binary: /usr/local/bin/git
+render: server              # server | client | none (R3-Q4)
+ddns:                       # gitd ddns subcommand (assumption 10)
+  host: git
+  domain: cmposer.cc
+  password_file: /etc/gitd/ddns-password
+  interval: 6h              # DDNS records expire ~30d if unrefreshed
+disk_min_free_bytes: 536870912   # 512MiB (R3-Q7, R7-Q4)
+spool:
+  retention: 90d            # delivered-event TTL (R6-Q1, R11-Q4)
+serve:
+  actions_buffer_size: 64   # 0-255 (R9-Q11)
+host_allowlist: [git.cmposer.cc, <EIP injected at deploy>, localhost, 127.0.0.1]   # mismatch → 400 (R8-Q5)
+mirror:
+  verify_interval: 168h     # weekly bundle verification (R8-Q3)
+policies:
+  enabled: [non-fast-forward]      # empty list = no policies
+  non-fast-forward:                # per-policy free-form config, parsed/validated by the plugin itself
+    branches: ["*"]                # example guard: globs of refs that must fast-forward

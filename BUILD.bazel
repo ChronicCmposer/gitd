@@ -1,0 +1,11 @@
+# gitd root build file.
+# Gazelle maintains package targets; the prefix directive pins the Go import
+# path so generated go_library/go_binary targets resolve correctly.
+#
+# gazelle:prefix github.com/ChronicCmposer/gitd
+# gazelle:exclude bazel-*
+
+package(default_visibility = ["//visibility:public"])
+
+# The dist artifacts and module scaffolding have no Go sources at the root.
+# Gazelle adds targets here as Go code is added at the root (currently none).

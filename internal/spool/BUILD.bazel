@@ -1,0 +1,8 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "spool",
+    srcs = ["spool.go"],
+    importpath = "github.com/ChronicCmposer/gitd/internal/spool",
+    visibility = ["//:__subpackages__"],
+)

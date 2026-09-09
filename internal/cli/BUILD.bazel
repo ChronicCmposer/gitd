@@ -1,0 +1,25 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cli",
+    srcs = [
+        "cli.go",
+        "ddns.go",
+        "mirror.go",
+        "notify.go",
+        "pre_receive.go",
+        "serve.go",
+        "spool.go",
+        "version.go",
+    ],
+    importpath = "github.com/ChronicCmposer/gitd/internal/cli",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/version"],
+)
+
+go_test(
+    name = "cli_test",
+    srcs = ["cli_test.go"],
+    embed = [":cli"],
+    deps = ["//internal/version"],
+)

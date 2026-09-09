@@ -1,0 +1,8 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "mirror",
+    srcs = ["mirror.go"],
+    importpath = "github.com/ChronicCmposer/gitd/internal/mirror",
+    visibility = ["//:__subpackages__"],
+)
