@@ -5,7 +5,10 @@
 # and packaged into the deployment bundle for userdata.sh, so the whole artifact
 # signing flow is ONE implementation. Two laws hold here:
 #   - sign_artifact   (build / operator side): write <file>.asc with the
-#     operator's signing key (GPG_KEY_ID, else the default key).
+#     operator's signing key, resolved in precedence order:
+#       1. GPG_KEY_ID (explicit env override wins)
+#       2. git config user.signingkey (repo-local -> global -> system)
+#       3. gpg's default key (safe fallback)
 #   - verify_artifact (consumer / host side): accept ONLY a pinned public key,
 #     imported into a throwaway GNUPGHOME, so provenance is proven against the
 #     committed key and never against whatever keys happen to exist on the host.
@@ -35,22 +38,38 @@ require_gpg() {
 }
 
 # sign_artifact <file> — write <file>.asc (detached, ASCII-armored) using the
-# operator's signing key. GPG_KEY_ID selects the key when set; otherwise gpg's
-# default key is used. Signing is atomic: it either produces a valid .asc or
-# fails loudly, so an unsigned artifact can never be published by accident.
+# operator's signing key, resolved in precedence order:
+#   1. GPG_KEY_ID (explicit env override wins)
+#   2. git config user.signingkey (repo-local -> global -> system, one call)
+#   3. gpg's default key (safe fallback)
+# Signing is atomic: it either produces a valid .asc or fails loudly, so an
+# unsigned artifact can never be published by accident.
 sign_artifact() {
-    local file="$1"
+    local file="$1" key=""
     [[ -f "${file}" ]] || die "cannot sign missing artifact: ${file}"
     require_gpg
     if [[ -n "${GPG_KEY_ID:-}" ]]; then
-        gpg --batch --yes --armor --detach-sign \
-            --local-user "${GPG_KEY_ID}" \
-            --output "${file}.asc" "${file}" \
-            || die "gpg detached-sign failed for ${file} (is GPG_KEY_ID='${GPG_KEY_ID}' a usable signing key?)"
+        key="${GPG_KEY_ID}"
     else
+        # git config exits 1 when the key is unset; tolerate that so it does not
+        # trip `set -euo pipefail` unexpectedly.
+        key="$(git config user.signingkey 2>/dev/null || true)"
+    fi
+    if [[ -n "${key}" ]]; then
+        if [[ -n "${GPG_KEY_ID:-}" ]]; then
+            echo "gitd: signing ${file} with GPG_KEY_ID='${key}'"
+        else
+            echo "gitd: signing ${file} with git config user.signingkey='${key}'"
+        fi
+        gpg --batch --yes --armor --detach-sign \
+            --local-user "${key}" \
+            --output "${file}.asc" "${file}" \
+            || die "gpg detached-sign failed for ${file} (is signing key '${key}' a usable signing key?)"
+    else
+        echo "gitd: signing ${file} with gpg default key (no GPG_KEY_ID or git config user.signingkey)"
         gpg --batch --yes --armor --detach-sign \
             --output "${file}.asc" "${file}" \
-            || die "gpg detached-sign failed for ${file} (no usable default signing key? set GPG_KEY_ID)"
+            || die "gpg detached-sign failed for ${file} (no usable default signing key? set GPG_KEY_ID or git config user.signingkey)"
     fi
     echo "gitd: signed ${file} -> ${file}.asc"
 }
