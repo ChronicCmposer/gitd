@@ -1,0 +1,54 @@
+# golangci-lint v2 configuration (Design Conventions lint gate).
+#
+# Linters here must be conservative but real: correctness + the sharpest
+# style checks without forcing churn on stable code. golangci-lint is pinned
+# by tools/lint.sh (see that file for the exact version).
+version: "2"
+
+run:
+  # Fuzz + other Go 1.26 language features; match the pinned toolchain.
+  go: "1.26"
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - revive
+  settings:
+    staticcheck:
+      checks:
+        - all
+        # Naming (ST1xxx) is covered by revive/intentional-naming and would
+        # churn stable API surface; keep the correctness checks.
+        - "-ST1000"
+        - "-ST1001"
+        - "-ST1003"
+        - "-ST1005"
+        - "-ST1006"
+        - "-ST1008"
+        - "-ST1016"
+        - "-ST1020"
+        - "-ST1021"
+        - "-ST1022"
+        - "-ST1023"
+    revive:
+      rules:
+        # package-comments is enforced by the codebase's own doc conventions;
+        # revive's wording is stricter than the existing (and correct) docs.
+        - name: package-comments
+          disabled: true
+  exclusions:
+    generated: lax
+    rules:
+      # Test helpers intentionally ignore io.Writer errors (t.Fatal paths).
+      - path: _test\.go$
+        linters:
+          - errcheck
+          - gocritic

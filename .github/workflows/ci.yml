@@ -15,6 +15,9 @@
 #   - go vet ./...      (static checks, fails loudly on suspicious code)
 #   - go test ./...     (plain tests)
 #   - go test -race ./...  (the R3-Q8 race detector for all packages)
+#   - make fmt-check   (gofmt enforced, Design Conventions)
+#   - make lint        (golangci-lint v2, Design Conventions)
+#   - fuzz job         (R3-Q9 + R5-Q9 fuzzers, bounded ~30s each)
 #
 # Token: contents: read only. No secrets are referenced.
 name: ci
@@ -29,7 +32,7 @@ permissions:
 
 jobs:
   test:
-    name: bazel + go build + vet + race
+    name: bazel + go build + vet + race + lint
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -57,3 +60,30 @@ jobs:
 
       - name: go test -race ./...  (R3-Q8)
         run: go test -race ./...
+
+      - name: gofmt (Design Conventions)
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "gofmt needed on:"; echo "$out"; exit 1; fi
+
+      - name: golangci-lint v2 (Design Conventions)
+        run: make lint
+
+  # R3-Q9 + R5-Q9: the SSH tokenizer and event decoder fuzzers, each bounded
+  # to ~30s of fuzzing via the Makefile's FUZZTIME (default already 30s).
+  fuzz:
+    name: fuzz (ssh tokenizer + event decoder)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      - name: make fuzz (FUZZTIME=30s per target)
+        run: make fuzz FUZZTIME=30s

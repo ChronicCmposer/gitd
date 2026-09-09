@@ -73,23 +73,26 @@ func runServe(args []string, _, _ io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// SIGHUP reloads the webhooks.yaml + gitd.yaml spool + policies subset
-	// (R8-Q6 fail-safe: invalid config keeps the old one and audit-logs).
-	sighup := make(chan os.Signal, 1)
-	signal.Notify(sighup, syscall.SIGHUP)
-	go func() {
-		for range sighup {
-			if err := rt.Reload(); err != nil {
-				log.Error("SIGHUP reload failed; keeping previous config", "error", err)
-			}
-		}
-	}()
-
 	store, err := s3.New(ctx, gitd.Storage.Bucket, gitd.Storage.Region)
 	if err != nil {
 		return fmt.Errorf("serve: storage: %w", err)
 	}
 	spoolStore := spool.NewStore(spoolDir, time.Now, gitd.Spool.Retention.D(), log)
+
+	// SIGHUP reloads the webhooks.yaml + gitd.yaml spool + policies subset
+	// (R8-Q6 fail-safe: invalid config keeps the old one and audit-logs).
+	// applyReload propagates the freshly loaded values to the live services,
+	// including the new spool.retention TTL used by the purge/sweep (R6-Q1).
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+	go func() {
+		for range sighup {
+			if err := applyReload(rt, spoolStore); err != nil {
+				log.Error("SIGHUP reload failed; keeping previous config", "error", err)
+			}
+		}
+	}()
+
 	m := mirror.New(store, git, reposRoot, gitd.Storage.Prefix, spoolDir, time.Now, log)
 	deliverer := webhook.NewDeliverer(rt.Webhooks, spoolStore, webhook.Default, time.Now, log)
 
@@ -139,4 +142,18 @@ func runServe(args []string, _, _ io.Writer) error {
 	go func() { errCh <- srv.Run(ctx) }()
 	go func() { errCh <- bh.Run(ctx, browseAddr) }()
 	return <-errCh
+}
+
+// applyReload re-parses the SIGHUP-reloadable config subset and, on a
+// successful reload, propagates the newly loaded values to the live services.
+// Fail-safe (R8-Q6): on any parse/validation error the previous config stays
+// live and the error is returned so the caller can audit-log it, with no
+// service state changed. It currently propagates spool.retention — the TTL
+// used by the purge/sweep — to the spool store (R6-Q1).
+func applyReload(rt *config.Runtime, spoolStore *spool.Store) error {
+	if err := rt.Reload(); err != nil {
+		return err
+	}
+	spoolStore.SetRetention(rt.Gitd().Spool.Retention.D())
+	return nil
 }

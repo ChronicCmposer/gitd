@@ -30,13 +30,6 @@ func errUsage(format string, args ...any) error {
 	return &usageError{msg: fmt.Sprintf(format, args...)}
 }
 
-// errNotImplemented reports a verb that exists but has no implementation yet.
-// Run prefixes the message with the verb, yielding "gitd: <verb>: not
-// implemented in this phase".
-func errNotImplemented() error {
-	return fmt.Errorf("not implemented in this phase")
-}
-
 // command is one gitd subcommand. run receives the arguments after the verb.
 type command struct {
 	name    string

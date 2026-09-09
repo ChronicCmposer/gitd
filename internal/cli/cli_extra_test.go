@@ -135,18 +135,6 @@ func TestRunDDNSUsage(t *testing.T) {
 	}
 }
 
-func TestErrNotImplemented(t *testing.T) {
-	err := errNotImplemented()
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("errNotImplemented() = %v", err)
-	}
-	// It is a plain runtime error: Run maps it to ExitError, not usage.
-	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"serve", "--config", "/nonexistent/gitd.yaml"}, &stdout, &stderr); code != ExitError {
-		t.Errorf("exit = %d, want %d", code, ExitError)
-	}
-}
-
 func TestParseConfigFlagErrors(t *testing.T) {
 	if _, _, err := parseConfigFlag([]string{"--bogus"}); err == nil {
 		t.Fatal("parseConfigFlag = nil error for bad flag")

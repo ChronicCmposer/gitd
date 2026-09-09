@@ -166,9 +166,10 @@ verbatim to `/etc/gitd` at first boot (EIP placeholder substituted into
 runtime edits are host-plane file edits + `ctr task kill --signal SIGHUP
 gitd-serve` (fail-safe reload).
 
-## Phase 9 — Mutation Testing Gate (MSI trend) — *placeholder*
+## Phase 9 — Mutation Testing Gate (MSI trend)
 
-Phase 9 adds mutation testing and coverage gates as CI hardening:
+Phase 9 adds mutation testing and coverage gates as CI hardening (shipped in
+`ff67e3c`):
 
 - `jonbaldie/go-mutesting/v2` v2.7.9 pinned in `go_deps` (hermetic,
   rules_go-built binary), `make mutate` (full baseline-aware run) + `make
@@ -176,11 +177,15 @@ Phase 9 adds mutation testing and coverage gates as CI hardening:
 - `make coverage` enforces >= 80% statement coverage per internal package with
   an explicit exceptions list.
 - A `mutate.yml` GitHub Actions workflow: PR job (git-diff mode) + nightly full
-  run whose **MSI (Mutation Score Indicator)** is reported as a trend here.
+  run. The nightly full-run **MSI (Mutation Score Indicator)** is reported as a
+  `gitd-mutation-reports` CI artifact; the MSI trend table is populated from
+  those artifacts.
 
-> **MSI trend table TBD.** Nightly full-run MSI results land here once Phase 9
-> ships. PR gates will be enforced separately (contents: read token, no secrets
-> in workflows, per R3-Q8).
+> **MSI trend.** The nightly full-run MSI is published as the
+> `gitd-mutation-reports` artifact in the nightly mutation workflow; the trend
+> table below is populated from those runs once they accumulate. PR gates are
+> enforced separately (contents: read token, no secrets in workflows, per
+> R3-Q8).
 
 ## Related pointers
 

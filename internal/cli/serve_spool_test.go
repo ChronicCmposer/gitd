@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChronicCmposer/gitd/internal/config"
 	"github.com/ChronicCmposer/gitd/internal/event"
 	"github.com/ChronicCmposer/gitd/internal/spool"
 )
@@ -226,6 +227,107 @@ func TestSpoolListEncodeError(t *testing.T) {
 type errWriter struct{}
 
 func (errWriter) Write([]byte) (int, error) { return 0, fmt.Errorf("disk full") }
+
+func TestApplyReloadPropagatesRetention(t *testing.T) {
+	// A SIGHUP reload must update the retention TTL actually used by the
+	// spool store for purge/sweep (R6-Q1), and only on a successful reload
+	// (R8-Q6 fail-safe). setRuntimePaths points spoolDir at a temp dir.
+	setRuntimePaths(t)
+
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "gitd.yaml")
+	webhooksPath := webhooksPathFor(cfgPath)
+	writeCfg := func(retention string) {
+		os.WriteFile(cfgPath, []byte("spool:\n  retention: "+retention+"\n"), 0o600)
+	}
+	os.WriteFile(webhooksPath, []byte("plugins: []\n"), 0o600)
+	writeCfg("10h")
+
+	rt, err := config.Load(cfgPath, webhooksPath, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Store booted with a 90d retention; the delivered record is created 2h
+	// before "now", so it survives under both 10h and 90d.
+	store := spool.NewStore(spoolDir, func() time.Time { return now }, 90*24*time.Hour, log)
+	ev := eventForTest("ev-ret", "r")
+	ev.CreatedAt = "2026-01-01T10:00:00Z"
+	if _, err := store.Write(ev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetState("ev-ret", spool.StateDelivered); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := store.Purge(); err != nil || n != 0 {
+		t.Fatalf("Purge with boot retention = %d, %v; want 0", n, err)
+	}
+
+	// Reload to a 1h retention; the 2h-old delivered record must now expire.
+	writeCfg("1h")
+	if err := applyReload(rt, store); err != nil {
+		t.Fatalf("applyReload = %v", err)
+	}
+	if got := rt.Gitd().Spool.Retention.D(); got != time.Hour {
+		t.Fatalf("reloaded retention = %v, want 1h", got)
+	}
+	n, err := store.Purge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("Purge after reload = %d, want 1 (reloaded 1h TTL expired the 2h-old record)", n)
+	}
+}
+
+func TestApplyReloadKeepsRetentionOnFailure(t *testing.T) {
+	// Fail-safe (R8-Q6): an invalid reloaded config must leave the previous
+	// retention live — the store must still expire on the OLD TTL, not on the
+	// unparsed candidate.
+	setRuntimePaths(t)
+
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "gitd.yaml")
+	webhooksPath := webhooksPathFor(cfgPath)
+	os.WriteFile(webhooksPath, []byte("plugins: []\n"), 0o600)
+	// Valid boot config: 10h retention.
+	os.WriteFile(cfgPath, []byte("spool:\n  retention: 10h\n"), 0o600)
+
+	rt, err := config.Load(cfgPath, webhooksPath, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := spool.NewStore(spoolDir, func() time.Time { return now }, 10*time.Hour, log)
+	ev := eventForTest("ev-ret", "r")
+	ev.CreatedAt = "2026-01-01T00:00:00Z" // 12h before now: expired under the 10h boot TTL.
+	if _, err := store.Write(ev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetState("ev-ret", spool.StateDelivered); err != nil {
+		t.Fatal(err)
+	}
+
+	// Break the config (negative retention fails validation): reload must
+	// fail loudly and the store must keep the 10h boot retention.
+	os.WriteFile(cfgPath, []byte("spool:\n  retention: -5h\n"), 0o600)
+	if err := applyReload(rt, store); err == nil {
+		t.Fatal("applyReload = nil, want validation error on bad retention")
+	}
+	n, err := store.Purge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("Purge after failed reload = %d, want 1 (boot 10h TTL still live)", n)
+	}
+}
 
 func TestRunServeDaemonStorageError(t *testing.T) {
 	// Without SSH_CONNECTION, runServe takes the daemon branch and builds the

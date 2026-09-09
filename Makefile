@@ -8,7 +8,7 @@ SHELL := /bin/bash
 DIST := tools/dist
 MUTATION := tools/mutation
 
-.PHONY: build test fuzz mutate mutate-ci coverage \
+.PHONY: build test fuzz lint fmt-check mutate mutate-ci coverage \
         check-openssh-dist check-git-dist check-fish-dist check-sudo-dist \
         check-ca-certs-dist check-containerd-dist check-runc-dist \
         check-pinned-go-dist check-openssh-dist-deps gen-dist-pins \
@@ -23,8 +23,28 @@ build: ## Build everything.
 test: ## Run all tests.
 	bazel test //...
 
-fuzz: ## Fuzz the SSH_ORIGINAL_COMMAND tokenizer (rules_go has no native fuzz support).
-	bazel run @io_bazel_rules_go//go -- test -fuzz=FuzzParseCommand ./internal/sshcmd/...
+# FUZZTIME bounds each fuzz target's run (a 30s CI-friendly budget by
+# default; override for long local runs, e.g. `make fuzz FUZZTIME=5m`).
+# rules_go has no native fuzz support, so each fuzzer is a `go test -fuzz=Fn`
+# run through the pinned rules_go SDK go binary.
+FUZZTIME ?= 30s
+FUZZ_RUN := bazel run @io_bazel_rules_go//go -- test
+
+fuzz: ## Fuzz the SSH tokenizer (R3-Q9) and the event decoder (R5-Q9), each bounded by FUZZTIME.
+	$(FUZZ_RUN) -fuzz=FuzzParseCommand -fuzztime=$(FUZZTIME) ./internal/sshcmd/...
+	$(FUZZ_RUN) -fuzz=FuzzDecodeEvent -fuzztime=$(FUZZTIME) ./internal/event/...
+
+# golangci-lint is pinned at a standalone-binary version and run via a thin
+# tools/lint.sh wrapper (dev-only, never added to the Go module). See
+# tools/lint.sh for the exact pin.
+lint: ## Run golangci-lint (pinned v2) over the module (Design Conventions: lint gate).
+	tools/lint.sh
+
+# gofmt enforcement (Design Conventions): fail loudly when any file is not
+# gofmt-formatted; `gofmt -l .` prints exactly the offenders and is empty on
+# success.
+fmt-check: ## Fail if any Go file is not gofmt-formatted.
+	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gitd: gofmt needed on:"; echo "$$out"; exit 1; fi
 
 mutate: ## Full baseline-aware mutation run over all internal/ packages (Phase 9, R4-Q1/Q3).
 	$(MUTATION)/mutate.sh
