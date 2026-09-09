@@ -14,3 +14,9 @@ host/
 #
 #   ddns password files must never be committed
 *ddns-password*
+
+# --- deploy.sh runtime staging bundle (7.3): never committed ------------------
+# deploy.sh stages the deployment bundle under cloudformation/out/ (bundle.XXXXXX
+# dirs + gitd-bundle-<sha>.tar.gz + gitd-container.tar). These are build-time
+# artifacts regenerated on every deploy, not source.
+cloudformation/out/
