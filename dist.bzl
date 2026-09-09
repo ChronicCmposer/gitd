@@ -18,22 +18,26 @@ are layout-compatible with the image: usr/... or etc/... at the top level.
 load("//:dist_pins.bzl", "DIST_PINS")
 
 # Product metadata: the artifact basename (matches tools/dist/build-*.sh
-# output), the mirror tag (<name>-<version>) and the S3 prefix (2.4). Keep in
-# sync with tools/dist/versions.sh. The artifact name is the build script's
+# output), the mirror FAMILY tag (openssh-dist, git-dist, ... — the strimserver
+# family-tag strategy: one stable release tag per product, re-uploaded with
+# --clobber on every pin bump) and the S3 prefix (2.4). Keep in sync with
+# tools/dist/versions.sh. The artifact name is the build script's
 # product_asset_name output, so "ca-certs" (the pipeline product key) maps to
 # the "ca-certificates" artifact name. The repo name is the canonical label
 # (underscore form) used by MODULE.bazel use_repo and //image:image.
 DIST_PRODUCTS = {
-    "openssh": {"name": "openssh", "version": "10.5p1", "prefix": "openssh", "repo": "openssh_dist"},
-    "git": {"name": "git", "version": "2.53.0", "prefix": "git", "repo": "git_dist"},
-    "fish": {"name": "fish", "version": "4.9.3", "prefix": "fish", "repo": "fish_dist"},
-    "sudo": {"name": "sudo", "version": "1.9.17p2", "prefix": "sudo", "repo": "sudo_dist"},
-    "ca-certs": {"name": "ca-certificates", "version": "20260611-r0", "prefix": "ca-certs", "repo": "ca_certs_dist"},
-    "containerd": {"name": "containerd", "version": "2.3.5", "prefix": "containerd", "repo": "containerd_dist"},
-    "runc": {"name": "runc", "version": "1.2.9", "prefix": "containerd", "repo": "runc_dist"},
+    "openssh": {"name": "openssh", "version": "10.5p1", "prefix": "openssh", "repo": "openssh_dist", "family": "openssh-dist"},
+    "git": {"name": "git", "version": "2.53.0", "prefix": "git", "repo": "git_dist", "family": "git-dist"},
+    "fish": {"name": "fish", "version": "4.9.3", "prefix": "fish", "repo": "fish_dist", "family": "fish-dist"},
+    "sudo": {"name": "sudo", "version": "1.9.17p2", "prefix": "sudo", "repo": "sudo_dist", "family": "sudo-dist"},
+    "ca-certs": {"name": "ca-certificates", "version": "20260611-r0", "prefix": "ca-certs", "repo": "ca_certs_dist", "family": "ca-certs-dist"},
+    "containerd": {"name": "containerd", "version": "2.3.5", "prefix": "containerd", "repo": "containerd_dist", "family": "containerd-dist"},
+    "runc": {"name": "runc", "version": "1.2.9", "prefix": "containerd", "repo": "runc_dist", "family": "runc-dist"},
 }
 
-GITHUB_BASE = "https://github.com/ChronicCmposer/gitd-dist/releases/download"
+# Artifacts publish to the PRIMARY gitd repo (ChronicCmposer/gitd) under family
+# release tags (strimserver pattern); there is no separate gitd-dist repo.
+GITHUB_BASE = "https://github.com/ChronicCmposer/gitd/releases/download"
 S3_BASE = "https://s3.us-east-2.amazonaws.com/git.cmposer.cc"
 
 # The artifact tarballs have no BUILD file of their own; expose the checksummed
@@ -84,7 +88,7 @@ def _dist_impl(_mctx):
     for product, meta in DIST_PRODUCTS.items():
         version = meta["version"]
         asset = "{}-{}.linux-{{arch}}.tar.gz".format(meta["name"], version)
-        tag = "{}-{}".format(meta["name"], version)
+        tag = meta["family"]
         dist_artifact(
             name = meta["repo"],
             urls = [

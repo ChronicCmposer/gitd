@@ -2,10 +2,10 @@
 # cloudformation/deploy.sh — build the deployment bundle and deploy the stack.
 #
 # Phase 7 orchestration (7.3): packages the host binaries + configs + userdata
-# into a deployment bundle, publishes gitd-container.tar to the gitd-dist
-# release, pushes the client-side certs to SSM, then creates/updates the
-# CloudFormation stack. Fail-fast and idempotent-ish (create if absent, update
-# if present).
+# into a deployment bundle, publishes gitd-container.tar to the gitd-container
+# family release on ChronicCmposer/gitd, pushes the client-side certs to SSM,
+# then creates/updates the CloudFormation stack. Fail-fast and idempotent-ish
+# (create if absent, update if present).
 #
 # Order matters (R3-Q2/R3-Q3): the bundle, image, and SSM certs must all exist
 # BEFORE create-stack, because the instance's bootstrap pulls them at first
@@ -22,7 +22,7 @@
 #   --instance-type <type>       default t4g.nano
 #   --bucket <bucket>            default git.cmposer.cc
 #   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
-#   --gitd-release-tag <tag>     gitd-dist release tag (default gitd-container)
+#   --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
 #   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
 # Environment: an authenticated gh CLI (gh auth login) to publish the image release.
 
@@ -41,7 +41,7 @@ BUCKET="git.cmposer.cc"
 IMAGE_TAR="${REPO_ROOT}/tools/dist/out/gitd-container.tar"
 GITD_RELEASE_TAG="gitd-container"
 BUNDLE_DIR="${SCRIPT_DIR}/out"
-DIST_REPO="ChronicCmposer/gitd-dist"
+DIST_REPO="ChronicCmposer/gitd"
 
 die() {
     echo "gitd: deploy: $*" >&2
@@ -82,10 +82,10 @@ Options:
   --instance-type <type>       default t4g.nano
   --bucket <bucket>            default git.cmposer.cc
   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
-  --gitd-release-tag <tag>     gitd-dist release tag (default gitd-container)
+  --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
 
-Environment: authenticated gh CLI (gh auth login) required to publish gitd-container.tar to the gitd-dist release.
+Environment: authenticated gh CLI (gh auth login) required to publish gitd-container.tar to the gitd-container release on ChronicCmposer/gitd.
 HELP
             exit 0
             ;;
@@ -173,7 +173,8 @@ echo "gitd: deploy: bundle: ${BUNDLE_TAR} (sha256 ${BUNDLE_SHA256})"
 aws s3 cp "${BUNDLE_TAR}" "s3://${BUCKET}/${BUNDLE_S3_KEY}" --region "${REGION}" --only-show-errors
 echo "gitd: deploy: bundle uploaded to s3://${BUCKET}/${BUNDLE_S3_KEY}"
 
-# --- publish gitd-container.tar to the gitd-dist release + S3 image fallback ---------
+# --- publish gitd-container.tar to the gitd-container family release on
+# ChronicCmposer/gitd + S3 image fallback -----------------------------------
 if gh release view "${GITD_RELEASE_TAG}" --repo "${DIST_REPO}" >/dev/null 2>&1; then
     gh release upload "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" "${IMAGE_TAR}.asc" --repo "${DIST_REPO}" --clobber
 else

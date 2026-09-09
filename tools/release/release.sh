@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # tools/release/release.sh — build a gitd release from an exact-tagged HEAD
-# (R1-Q11/Q14, R6-Q3), and optionally publish the image to gitd-dist.
+# (R1-Q11/Q14, R6-Q3), and optionally publish the image to the gitd-container
+# family release on ChronicCmposer/gitd (strimserver family-tag strategy).
 #
 # Usage:
 #   make release
@@ -15,7 +16,8 @@
 #   - print the sha256 the operator uses as the out-of-band update pin (R6-Q3).
 #
 # Optional publish (only when the gh CLI is authenticated): upload
-# gitd-container.tar to the gitd-container release on ChronicCmposer/gitd-dist.
+# gitd-container.tar to the gitd-container family release on
+# ChronicCmposer/gitd.
 # A skipped or failed publish NEVER fails the build — the sha256 pin above is
 # the deliverable, and publishing is belt-and-braces for the artifact channel.
 
@@ -62,11 +64,11 @@ echo "gitd: release: update pin (out-of-band, R6-Q3): ${sha256}"
 if ! gh_auth; then
     echo "gitd: release: gh not installed or not authenticated (run 'gh auth login'); skipped publish (build + sha256 are the core)" >&2
 else
-    if gh release view gitd-container --repo ChronicCmposer/gitd-dist >/dev/null 2>&1; then
-        gh release upload gitd-container "${tar}" "${tar}.asc" --repo ChronicCmposer/gitd-dist --clobber \
+    if gh release view gitd-container --repo ChronicCmposer/gitd >/dev/null 2>&1; then
+        gh release upload gitd-container "${tar}" "${tar}.asc" --repo ChronicCmposer/gitd --clobber \
             || echo "gitd: release: WARNING: publish upload failed; sha256 above is still the update pin" >&2
     else
-        gh release create gitd-container "${tar}" "${tar}.asc" --repo ChronicCmposer/gitd-dist \
+        gh release create gitd-container "${tar}" "${tar}.asc" --repo ChronicCmposer/gitd \
             --title "gitd ${tag}" \
             --notes "gitd-container.tar built from ${tag}. Update pin sha256: ${sha256}. GPG-signed (gitd-signing-key.asc)." \
             || echo "gitd: release: WARNING: publish create failed; sha256 above is still the update pin" >&2

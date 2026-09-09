@@ -5,11 +5,16 @@
 #   tools/dist/publish-dist.sh <product>    # openssh|git|fish|sudo|ca-certs|containerd|runc
 #
 # Publishes the product tarball from tools/dist/out to:
-#   - S3 primary fallback:  s3://git.cmposer.cc/<prefix>/<asset>
-#   - GitHub Releases:      ChronicCmposer/gitd-dist release tag <product>-<version>
+#   - GitHub Releases:      ChronicCmposer/gitd family release tag
+#                           (openssh-dist, git-dist, fish-dist, sudo-dist,
+#                           ca-certs-dist, containerd-dist, runc-dist —
+#                           strimserver family-tag strategy on the PRIMARY repo)
+#   - S3 fallback:          s3://git.cmposer.cc/<prefix>/<asset>
 # GitHub Releases is the primary artifact source for Bazel (R3-Q2); S3 is the
-# fallback mirror. Requires: the determinism check passed, aws CLI credentials
-# for the bucket, and an authenticated gh CLI (gh auth login).
+# fallback mirror. Requires: the determinism check passed and an authenticated
+# gh CLI (gh auth login). The S3 upload is best-effort: the bucket is created by
+# the CloudFormation stack at deploy time, so a missing bucket must NOT block
+# the GitHub publish (a failed S3 upload is a loud warning, not fatal).
 #
 # S3 prefixes (2.4): openssh/ git/ fish/ containerd/ (runc rides containerd/).
 
@@ -32,14 +37,15 @@ PRODUCT="publish-dist"
 product="$1"
 # asset_name mirrors the build scripts' product_asset_name output: the pipeline
 # product key is "ca-certs" but the artifact is named "ca-certificates-...".
+# family is the stable strimserver-style release tag on the primary repo.
 case "${product}" in
-    openssh)    version="${OPENSSH_VERSION}"    ; prefix="openssh"     ; asset_name="openssh" ;;
-    git)        version="${GIT_VERSION}"        ; prefix="git"         ; asset_name="git" ;;
-    fish)       version="${FISH_VERSION}"        ; prefix="fish"       ; asset_name="fish" ;;
-    sudo)       version="${SUDO_VERSION}"        ; prefix="sudo"       ; asset_name="sudo" ;;
-    ca-certs)   version="${CA_CERTS_VERSION}"    ; prefix="ca-certs"   ; asset_name="ca-certificates" ;;
-    containerd) version="${CONTAINERD_VERSION}"  ; prefix="containerd" ; asset_name="containerd" ;;
-    runc)       version="${RUNC_VERSION}"        ; prefix="containerd" ; asset_name="runc" ;;
+    openssh)    version="${OPENSSH_VERSION}"    ; prefix="openssh"     ; asset_name="openssh"        ; family="openssh-dist" ;;
+    git)        version="${GIT_VERSION}"        ; prefix="git"         ; asset_name="git"            ; family="git-dist" ;;
+    fish)       version="${FISH_VERSION}"        ; prefix="fish"       ; asset_name="fish"           ; family="fish-dist" ;;
+    sudo)       version="${SUDO_VERSION}"        ; prefix="sudo"       ; asset_name="sudo"           ; family="sudo-dist" ;;
+    ca-certs)   version="${CA_CERTS_VERSION}"    ; prefix="ca-certs"   ; asset_name="ca-certificates"; family="ca-certs-dist" ;;
+    containerd) version="${CONTAINERD_VERSION}"  ; prefix="containerd" ; asset_name="containerd"     ; family="containerd-dist" ;;
+    runc)       version="${RUNC_VERSION}"        ; prefix="containerd" ; asset_name="runc"           ; family="runc-dist" ;;
     *) die "unknown product '${product}'" ;;
 esac
 
@@ -53,23 +59,31 @@ src="${DIST_DIR}/out/${asset}"
 # product is ever uploaded.
 sign_artifact "${src}"
 
-# GitHub tag + asset upload (tar + .asc together). gh reads its own stored
-# credentials (GH_TOKEN, if set, is used by gh as an override).
+# GitHub family-tag release + asset upload (tar + .asc together) on the PRIMARY
+# repo (DIST_REPO=ChronicCmposer/gitd). Create the family release once with a
+# descriptive title; re-runs clobber-upload the assets so a pin bump never
+# needs a new tag (strimserver pattern). gh reads its own stored credentials
+# (GH_TOKEN, if set, is used by gh as an override).
 require_gh_auth
-tag="${product}-${version}"
-if gh release view "${tag}" --repo "${DIST_REPO}" >/dev/null 2>&1; then
-    gh release upload "${tag}" "${src}" "${src}.asc" --repo "${DIST_REPO}" --clobber
+if gh release view "${family}" --repo "${DIST_REPO}" >/dev/null 2>&1; then
+    gh release upload "${family}" "${src}" "${src}.asc" --repo "${DIST_REPO}" --clobber
 else
-    gh release create "${tag}" "${src}" "${src}.asc" --repo "${DIST_REPO}" \
-        --title "${product} ${version}" \
-        --notes "Deterministic build artifact (gitd dist pipeline). sha256: $(sha256_of "${src}"). GPG-signed (gitd-signing-key.asc)."
+    gh release create "${family}" "${src}" "${src}.asc" --repo "${DIST_REPO}" \
+        --title "${family}" \
+        --notes "Deterministic build artifact (gitd dist pipeline, family tag). sha256: $(sha256_of "${src}"). GPG-signed (gitd-signing-key.asc)."
 fi
-echo "gitd: publish-dist: ${product}: GitHub release ${tag}"
+echo "gitd: publish-dist: ${product}: GitHub release ${family} on ${DIST_REPO}"
 
-# S3 fallback mirror (tar + .asc together).
-require_cmd aws
-aws s3 cp "${src}" "s3://${S3_BUCKET}/${prefix}/${asset}" \
-    --region "${S3_REGION}" --only-show-errors
-aws s3 cp "${src}.asc" "s3://${S3_BUCKET}/${prefix}/${asset}.asc" \
-    --region "${S3_REGION}" --only-show-errors
-echo "gitd: publish-dist: ${product}: s3://${S3_BUCKET}/${prefix}/${asset}"
+# S3 fallback mirror (tar + .asc together). Best-effort: the bucket is created
+# by the CloudFormation stack at deploy time, so a missing bucket (or aws CLI)
+# must not block the GitHub publish — a failed S3 upload is a loud warning.
+if ! command -v aws >/dev/null 2>&1; then
+    echo "gitd: publish-dist: ${product}: WARNING: aws CLI not found; skipped S3 fallback upload (GitHub release ${family} is the working primary)" >&2
+elif ! { aws s3 cp "${src}" "s3://${S3_BUCKET}/${prefix}/${asset}" \
+            --region "${S3_REGION}" --only-show-errors \
+        && aws s3 cp "${src}.asc" "s3://${S3_BUCKET}/${prefix}/${asset}.asc" \
+            --region "${S3_REGION}" --only-show-errors; }; then
+    echo "gitd: publish-dist: ${product}: WARNING: S3 fallback upload failed (bucket ${S3_BUCKET} may not exist until deploy); GitHub release ${family} is the working primary" >&2
+else
+    echo "gitd: publish-dist: ${product}: s3://${S3_BUCKET}/${prefix}/${asset} (+ .asc)"
+fi

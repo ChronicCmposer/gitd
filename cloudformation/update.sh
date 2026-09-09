@@ -34,8 +34,8 @@
 #   --region <region>       default us-east-2
 #   --stack-name <name>     default gitd (used to resolve the instance)
 #   --instance-id <id>      override instance resolution from the stack
-#   --gitd-release-tag <t>  gitd-dist release tag (default gitd-container)
-#   --dist-repo <owner/repo> gitd-dist repo (default ChronicCmposer/gitd-dist)
+#   --gitd-release-tag <t>  gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
+#   --dist-repo <owner/repo> gitd repo (default ChronicCmposer/gitd)
 #
 # Environment: GITD_IMAGE_SHA256, authenticated gh CLI (to publish), aws credentials.
 # Idempotent: a re-run with the same pin re-verifies + re-imports the same image
@@ -64,7 +64,7 @@ REGION="us-east-2"
 STACK_NAME="gitd"
 INSTANCE_ID=""
 GITD_RELEASE_TAG="gitd-container"
-DIST_REPO="ChronicCmposer/gitd-dist"
+DIST_REPO="ChronicCmposer/gitd"
 IMAGE_REF="git.cmposer.cc/gitd:latest"
 
 die() {
@@ -119,8 +119,8 @@ Options:
   --region <region>       default us-east-2
   --stack-name <name>     default gitd
   --instance-id <id>      override instance resolution from the stack
-  --gitd-release-tag <t>  gitd-dist release tag (default gitd-container)
-  --dist-repo <o/r>       gitd-dist repo (default ChronicCmposer/gitd-dist)
+  --gitd-release-tag <t>  gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
+  --dist-repo <o/r>       gitd repo (default ChronicCmposer/gitd)
 
 Environment: GITD_IMAGE_SHA256, authenticated gh CLI (gh auth login), aws credentials.
 HELP

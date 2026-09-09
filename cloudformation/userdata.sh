@@ -14,7 +14,7 @@
 #   BUCKET                                S3 bucket (artifacts + repos + bundles)
 #   IMAGE_SHA256                          pinned sha256 of gitd-container.tar (R3-Q2)
 #   CONTAINERD_SHA256 / RUNC_SHA256       pinned sha256 of host binaries (R3-Q2)
-#   GITD_RELEASE_TAG                      gitd-dist release tag for the image
+#   GITD_RELEASE_TAG                      gitd-container family release tag on ChronicCmposer/gitd for the image
 #
 # The EIP is discovered from IMDSv2 (public-ipv4) so the stack does not have to
 # pass it in: it is substituted into gitd.yaml's host_allowlist at boot.
@@ -272,7 +272,7 @@ fi
 require_cmd gpg
 
 IMAGE_TAR="${BUNDLE_DIR}/gitd-container.tar"
-GITHUB_IMAGE_URL="https://github.com/ChronicCmposer/gitd-dist/releases/download/${GITD_RELEASE_TAG}/gitd-container.tar"
+GITHUB_IMAGE_URL="https://github.com/ChronicCmposer/gitd/releases/download/${GITD_RELEASE_TAG}/gitd-container.tar"
 GITHUB_IMAGE_ASC_URL="${GITHUB_IMAGE_URL}.asc"
 S3_IMAGE_URL="s3://${BUCKET}/image/gitd-container.tar"
 S3_IMAGE_ASC_URL="s3://${BUCKET}/image/gitd-container.tar.asc"

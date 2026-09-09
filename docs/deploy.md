@@ -16,8 +16,8 @@ boot. This script enforces that ordering with early `set -euo pipefail` exits.
 These must all be true before the first deploy:
 
 - **Authenticated `gh` CLI.** `gh` installed and logged in (`gh auth login`),
-  with `repo` scope over `ChronicCmposer/gitd-dist` (used to publish
-  `gitd-container.tar` to the `gitd-container` release).
+  with `repo` scope over `ChronicCmposer/gitd` (used to publish
+  `gitd-container.tar` to the `gitd-container` family release).
 - **AWS credentials.** `aws` CLI configured with credentials for the deploy
   account/region (`us-east-2` by default). The instance role grants only
   read/`repos/` access to S3 and `ssm:GetParameter` on `/gitd/*`; your own
@@ -72,7 +72,7 @@ cloudformation/deploy.sh \
 | `--instance-type` | `t4g.nano` | no | Instance type (arm64) |
 | `--bucket` | `git.cmposer.cc` | no | S3 bucket (artifacts + repos + bundles) |
 | `--image-tar` | `tools/dist/out/gitd-container.tar` | no | OCI image tarball |
-| `--gitd-release-tag` | `gitd-container` | no | gitd-dist release tag |
+| `--gitd-release-tag` | `gitd-container` | no | gitd-container family release tag on `ChronicCmposer/gitd` |
 | `--bundle-dir` | `cloudformation/out` | no | Bundle staging dir |
 
 `--key-name` and `--eip-allocation-id` are enforced with a fail-fast exit
@@ -101,8 +101,8 @@ before anything else runs.
    taken over the tarball and it is stored in the bundle dir as
    `gitd-bundle-<sha256>.tar.gz` and uploaded to
    `s3://<bucket>/bundles/gitd-bundle-<sha256>.tar.gz`.
-4. **Publish the image** to the `gitd-container` release on
-   `ChronicCmposer/gitd-dist` (create if absent, `--clobber` upload if present)
+4. **Publish the image** to the `gitd-container` family release on
+   `ChronicCmposer/gitd` (create if absent, `--clobber` upload if present)
    and to `s3://<bucket>/image/gitd-container.tar`. The image is GPG-signed
    first (`gitd-container.tar.asc`, operator key) and the `.asc` is uploaded
    alongside to both channels. The pinned `IMAGE_SHA256` is recorded in the

@@ -120,8 +120,8 @@ make release                          # build the stamped binary + gitd-containe
 `gitd-container.tar`** (`gitd-container.tar.asc`, operator key via
 `GPG_KEY_ID`), prints the sha256 you use as the **out-of-band update pin** for
 `make update` (R6-Q3), and optionally publishes the tar **and** `.asc` to the
-`gitd-dist` release when the `gh` CLI is authenticated (a skipped/failed
-publish never fails the build).
+`gitd-container` family release on `ChronicCmposer/gitd` when the `gh` CLI is
+authenticated (a skipped/failed publish never fails the build).
 
 ### Artifact signing (GPG)
 

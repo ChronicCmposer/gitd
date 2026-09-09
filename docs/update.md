@@ -60,9 +60,9 @@ to push a routine upgrade to a live server.
    # host plane
    expected="<paste the sha256 printed by make image-container>"   # out-of-band
    curl -fsSL -o /opt/gitd-container.tar \
-     https://github.com/ChronicCmposer/gitd-dist/releases/download/gitd-container/gitd-container.tar
+     https://github.com/ChronicCmposer/gitd/releases/download/gitd-container/gitd-container.tar
    curl -fsSL -o /opt/gitd-container.tar.asc \
-     https://github.com/ChronicCmposer/gitd-dist/releases/download/gitd-container/gitd-container.tar.asc
+     https://github.com/ChronicCmposer/gitd/releases/download/gitd-container/gitd-container.tar.asc
    # pinned public key (committed at tools/release/gitd-signing-key.asc)
    gpg --homedir "$(mktemp -d)" --import /opt/gitd-signing-key.asc
    gpg --verify /opt/gitd-container.tar.asc /opt/gitd-container.tar   # must print "Good signature"

@@ -101,8 +101,8 @@ The commit is the `RepoRefSha` the next deploy/update will reference (R3-Q2).
 make publish-openssh-dist   # tools/dist/publish-dist.sh openssh
 ```
 
-This uploads the determinism-checked artifact to the GitHub mirror tag
-(`openssh-<version>` on `ChronicCmposer/gitd-dist`, primary, R3-Q2) and to
+This uploads the determinism-checked artifact to the GitHub family release tag
+(`openssh-dist` on `ChronicCmposer/gitd`, primary, R3-Q2) and to
 `s3://git.cmposer.cc/openssh/` (fallback). Before uploading, the artifact is
 **GPG-signed** (detached ASCII-armored `.asc`, operator key via `GPG_KEY_ID`)
 and the `.asc` is uploaded alongside on both channels — consumers (boot,

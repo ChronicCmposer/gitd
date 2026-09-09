@@ -83,8 +83,11 @@ GO_ARM64_SHA256="fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d4
 
 # --- Mirror (2.4, R3-Q2) --------------------------------------------------------------
 # GitHub Releases is the primary artifact source; S3 is the fallback. Bucket
-# git.cmposer.cc, product prefixes openssh/ git/ fish/ containerd/.
-DIST_REPO="ChronicCmposer/gitd-dist"
+# git.cmposer.cc, product prefixes openssh/ git/ fish/ containerd/. Following
+# the strimserver family-tag strategy, every product publishes under a stable
+# FAMILY release tag (openssh-dist, git-dist, ...) on the PRIMARY gitd repo
+# (ChronicCmposer/gitd) — there is no separate gitd-dist repo.
+DIST_REPO="ChronicCmposer/gitd"
 S3_BUCKET="git.cmposer.cc"
 S3_REGION="us-east-2"
 S3_BASE="https://s3.${S3_REGION}.amazonaws.com/${S3_BUCKET}"
