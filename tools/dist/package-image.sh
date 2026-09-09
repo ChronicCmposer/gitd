@@ -26,11 +26,17 @@ image_dir="$(bazel info bazel-bin 2>/dev/null)/image/image"
     || die "OCI layout not found at ${image_dir}; run: bazel build //image:image"
 
 mkdir -p "$(dirname "${OUT_FILE}")"
+# rules_oci's oci_image output references the layer blobs as SYMLINKS into the
+# bazel-bin tree (blobs/sha256/<digest> -> ../../../<layer>.tar). The packaged
+# tar must carry the blob CONTENTS (--dereference), not dangling links, or
+# `ctr images import` cannot read the layers. Dereferencing stays deterministic:
+# the layer tars are byte-deterministic and every entry mtime is pinned below.
 tar \
     --sort=name \
     --mtime="@${SOURCE_DATE_EPOCH}" \
     --owner=0 --group=0 --numeric-owner \
     --format=gnu \
+    --dereference \
     -C "${image_dir}" \
     -cf "${OUT_FILE}" \
     .
