@@ -30,6 +30,6 @@ host_allowlist: [git.cmposer.cc, <EIP injected at deploy>, localhost, 127.0.0.1]
 mirror:
   verify_interval: 168h     # weekly bundle verification (R8-Q3)
 policies:
-  enabled: [non-fast-forward]      # empty list = no policies
+  enabled: []                      # disabled by default; add "non-fast-forward" to enable, e.g. [non-fast-forward]
   non-fast-forward:                # per-policy free-form config, parsed/validated by the plugin itself
     branches: ["*"]                # example guard: globs of refs that must fast-forward
