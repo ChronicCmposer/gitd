@@ -1,0 +1,166 @@
+# gitd — git.cmposer.cc
+
+A minimal, single-user **personal git server on AWS** (`t4g.nano`, AL2023 arm64,
+`us-east-2`), focused on post-quantum transport, durable S3 mirroring, an
+mTLS-gated browse UI, and a small webhook plugin architecture — deployed via
+CloudFormation at **~$4.50/month** ([cost model](docs/cost.md)).
+
+It is the implementation of `plans/git.cmposer.cc.md` (that plan is gitignored /
+internal). Module path `github.com/ChronicCmposer/gitd`, Go 1.26.x, Bazel
+(`rules_go` 0.63.0 + gazelle 0.54.0) with a Makefile facade.
+
+## What it is
+
+| Surface | What | Gate |
+|---------|------|------|
+| `:22` SSH gateway | custom static **OpenSSH** with **hybrid-PQC kex** (`mlkem768x25519`/`sntrup761x25519`), SSH-CA mutual auth, GitHub-style greeting, push-to-create | SSH host + user certs (local CA) |
+| S3 mirror | every push bundles `--all` → versioned `s3://git.cmposer.cc/repos/<repo>/<ts>.bundle`; weekly verify; restore via `gitd mirror fetch` | instance role |
+| `:443` browse | mTLS read-only UI (server/client/none render toggle, security headers, empty-repo pages) | client cert from the TLS CA |
+| webhooks | compiled-in Go plugins (`http`, `logger`) + durable JSON spool, HMAC-SHA256, dead-letter + replay | plugin `type:` + HMAC secret |
+
+The admin path is split (R2-Q16): **SSH lands in the container shell** for
+data-plane ops (`gitd spool`/`mirror`, repo management); **SSM Session Manager**
+(`ssm:StartSession`-only IAM) is the host plane (containerd, dnf, systemctl,
+journalctl). See [admin-split](docs/admin-split.md).
+
+## Architecture at a glance
+
+- One self-contained VPC/stack: `cloudformation/stack.yaml` creates the VPC, SG
+  (22 + 443 in, 443-only egress), versioned SSE-S3 bucket, IAM instance role,
+  a `t4g.nano` behind an EIP; `cloudformation/userdata.sh` boots it from a
+  sha256-pinned deployment bundle.
+- A **from-scratch OCI image** (rules_oci) holds `sshd` + `git` + `fish` +
+  `sudo` + `ca-certificates` + `gitd`; three `ctr run --rm --net-host` systemd
+  units (`gitd-sshd`, `gitd-serve`, `gitd-ddns`) share host bind mounts
+  (`/srv/git`, `/var/spool/gitd`, `/etc/gitd`, `/home/admin`), hard-capped
+  memory, `--rootfs-ro`.
+- **gitd-serve** owns a strimserver-style actions channel (buffered chan +
+  single worker) and an HTTP-over-unix-socket control plane (`/v1/bundle`,
+  `/v1/deliver`); hook shims exec `gitd notify`/`gitd pre-receive`, which submit
+  uploads/deliveries into that channel.
+- Certs/CA live **client-side only** (`~/.ssh/gitd-ca/`, gitignored); SSM
+  `/gitd/*` carries the issued material to the host (upload-certs.sh), with
+  per-handshake reads for zero-downtime TLS rotation and passwordless renewal.
+
+Post-quantum posture is deliberately split — **hybrid-PQC key exchange
+everywhere** (SSH kex + TLS 1.3 `X25519MLKEM768`), but **classical Ed25519 /
+ECDSA P-256 authentication** (no PQC signatures in OpenSSH yet, RSA-4096 is
+strictly worse). See the [quantum threat model](docs/quantum-threat-model.md).
+
+## Layout
+
+```
+cmd/gitd/                entry point (dispatch in internal/cli)
+internal/
+  cli/                   gitd subcommand dispatch: serve, notify, pre-receive, spool, ddns, mirror, version
+  sshcmd/                SSH_ORIGINAL_COMMAND tokenizer + git gateway + greeting
+  config/                strict YAML (gitd.yaml, webhooks.yaml), SIGHUP reload
+  event/ spool/          webhook event envelope + durable JSON spool (fsync, retries, dead-letter)
+  webhook/               Plugin + PolicyPlugin interfaces, registry; plugins/{http,logger}, policies/nonfastforward
+  objectstore/ s3/       consumer-side ObjectStore seam (Put/Get/List/Delete) + s3 impl
+  mirror/                git bundle create/verify/restore (S3 mirror)
+  serve/                 actions-channel daemon + unix-socket control server + sweep/verify loops
+  browse/ render/        :443 mTLS browse UI + rendering
+  socket/ disk/ gitenv/ repo/ version/   cross-cutting seams (unix-socket client, disk guard, fixed git env, repo rules, versioning)
+cloudformation/          stack.yaml, userdata.sh, deploy.sh, upload-certs.sh, ddns-setup.md
+configs/                 gitd.yaml + webhooks.yaml examples (R13-Q4, shipped verbatim at boot)
+tools/dist/              deterministic dist pipeline (openssh/git/fish/sudo/ca-certs/containerd/runc/Go)
+tools/ssh-ca/            SSH CA tooling + client setup
+pki/                     TLS mTLS PKI tooling + renewal timers
+image/                   from-scratch OCI image assembly
+docs/                    runbooks (below)
+```
+
+## Build / test / run
+
+The Makefile is a thin facade over Bazel + the dist pipeline
+(`tools/dist/README.md` for the whole pipeline).
+
+```sh
+make build        # bazel build //...
+make test         # bazel test //...
+make fuzz         # fuzz the SSH_ORIGINAL_COMMAND tokenizer (bazel run rules_go test -fuzz=...)
+make mutate       # mutation testing (Phase 9; stub until then)
+make coverage     # statement coverage via the pinned rules_go SDK
+```
+
+Dist / image targets (need root + network for chroot builds, `GH_TOKEN` + aws
+to publish):
+
+```sh
+make check-openssh-dist check-git-dist ...   # build-twice determinism gates
+make gen-dist-pins                           # regenerate //:dist_pins.bzl
+make publish-openssh-dist publish-git-dist ... # GitHub-first, S3-fallback publish
+make image-container                         # gitd-container.tar for ctr images import
+make deploy ARGS="--key-name KP --eip-allocation-id EIP"   # CloudFormation deploy
+```
+
+### Running the CLI locally
+
+All dispatch lives in `internal/cli`; entry point `cmd/gitd/main.go`.
+
+```sh
+go run ./cmd/gitd version                              # print the version
+go run ./cmd/gitd serve  --config ...                  # gateway (SSH_CONNECTION) or daemon
+go run ./cmd/gitd notify --config /etc/gitd/gitd.yaml  # post-receive hook
+go run ./cmd/gitd pre-receive --config ...             # pre-receive hook
+go run ./cmd/gitd spool list                           # list spool events (NDJSON)
+go run ./cmd/gitd spool replay <id>                    # re-deliver one event
+go run ./cmd/gitd spool purge                          # remove delivered+expired events
+go run ./cmd/gitd mirror list <repo>                   # list S3 bundles
+go run ./cmd/gitd mirror delete <repo>                 # delete a repo's bundles
+go run ./cmd/gitd mirror fetch <repo> <dest>           # restore from the latest bundle
+go run ./cmd/gitd ddns --config ...                    # Namecheap dynamic DNS refresh
+```
+
+Exit codes: `0` ok, `1` runtime, `2` usage; errors to stderr as
+`gitd: <err>` (R1-Q5).
+
+## Runbooks (`docs/`)
+
+| Runbook | Covers |
+|---------|--------|
+| [deploy](docs/deploy.md) | prerequisites, `deploy.sh`, artifact sha256 pin flow, boot/rollback, SSM access, post-boot verification |
+| [restore-from-s3](docs/restore-from-s3.md) | `gitd mirror fetch <repo> <dest>` restore, weekly bundle verify, repo deletion |
+| [cert-renewal](docs/cert-renewal.md) | TLS + SSH renewal (client timer → SSM → cert-sync; host-cert via update.sh) |
+| [plugin-authoring](docs/plugin-authoring.md) | webhook `Plugin` interface, registry, http/logger, HMAC, config schema, delivery semantics |
+| [openssh-upgrade](docs/openssh-upgrade.md) | bump pin, auth-identity patch, rebuild, determinism, republish, in-place update |
+| [admin-split](docs/admin-split.md) | container-shell data plane vs SSM host plane, `gitd` verb reference |
+| [update](docs/update.md) | in-place `update.sh` flow (out-of-band sha256 pin, ctr import, restart) |
+| [ca-loss-recovery](docs/ca-loss-recovery.md) | new CA + reissue + SSM + `@cert-authority` cutover |
+| [quantum-threat-model](docs/quantum-threat-model.md) | hybrid-PQC kex vs classical signatures, revisit triggers |
+| [verification](docs/verification.md) | end-to-end probes (ssh greeting + mTLS curl only) |
+| [cost](docs/cost.md) | ~$4.50/mo breakdown |
+
+## Configuration provenance (R13-Q4)
+
+`configs/gitd.yaml` + `configs/webhooks.yaml` are the *example/authoritative
+target* configs (matching the plan's Config Schemas appendix). `deploy.sh`
+packages them into the deployment bundle and `userdata.sh` writes them
+verbatim to `/etc/gitd` at first boot (EIP placeholder substituted into
+`host_allowlist`). **After first boot the host copies are authoritative** —
+runtime edits are host-plane file edits + `ctr task kill --signal SIGHUP
+gitd-serve` (fail-safe reload).
+
+## Phase 9 — Mutation Testing Gate (MSI trend) — *placeholder*
+
+Phase 9 adds mutation testing and coverage gates as CI hardening:
+
+- `jonbaldie/go-mutesting/v2` v2.7.9 pinned in `go_deps` (hermetic,
+  rules_go-built binary), `make mutate` (full baseline-aware run) + `make
+  mutate-ci` (selected `git-diff` mode, zero new survivors on changed lines).
+- `make coverage` enforces >= 80% statement coverage per internal package with
+  an explicit exceptions list.
+- A `mutate.yml` GitHub Actions workflow: PR job (git-diff mode) + nightly full
+  run whose **MSI (Mutation Score Indicator)** is reported as a trend here.
+
+> **MSI trend table TBD.** Nightly full-run MSI results land here once Phase 9
+> ships. PR gates will be enforced separately (contents: read token, no secrets
+> in workflows, per R3-Q8).
+
+## Related pointers
+
+- Dist pipeline internals: `tools/dist/README.md`
+- SSH CA + client setup: `tools/ssh-ca/README.md`
+- TLS mTLS PKI + renewal: `pki/README.md`
+- Namecheap DDNS one-time setup: `cloudformation/ddns-setup.md`
