@@ -57,7 +57,8 @@ against the committed public key `tools/release/gitd-signing-key.asc`
 (fail-fast if signing fails — no unsigned dist product is ever published).
 
 Requirements: root (chroot builds), network, `curl`, `tar`, `openssl`
-(ca-certificates), `gh` + `GH_TOKEN` and `aws` CLI (publish only). The alpine
+(ca-certificates), an authenticated `gh` CLI (`gh auth login`) and `aws` CLI
+(publish only). The alpine
 and AL2023 chroots are cached under `.cache/` and reused across builds for
 repeatability; delete `.cache/` to force a fresh base.
 

@@ -37,7 +37,7 @@
 #   --gitd-release-tag <t>  gitd-dist release tag (default gitd-container)
 #   --dist-repo <owner/repo> gitd-dist repo (default ChronicCmposer/gitd-dist)
 #
-# Environment: GITD_IMAGE_SHA256, GH_TOKEN (to publish), aws credentials.
+# Environment: GITD_IMAGE_SHA256, authenticated gh CLI (to publish), aws credentials.
 # Idempotent: a re-run with the same pin re-verifies + re-imports the same image
 # (ctr import overwrites the tag) and restarts the units — safe to repeat.
 
@@ -50,6 +50,10 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # host uses to verify the fetched image's provenance.
 # shellcheck source=tools/release/sign-artifact.sh
 source "${REPO_ROOT}/tools/release/sign-artifact.sh"
+# Shared gh CLI auth guard (gh_auth / require_gh_auth) — gh reads its own
+# stored credentials (GH_TOKEN, if set, is used by gh as an override).
+# shellcheck source=tools/release/gh-auth.sh
+source "${REPO_ROOT}/tools/release/gh-auth.sh"
 SIGNING_KEY="${REPO_ROOT}/tools/release/gitd-signing-key.asc"
 
 # --- defaults ------------------------------------------------------------------
@@ -118,7 +122,7 @@ Options:
   --gitd-release-tag <t>  gitd-dist release tag (default gitd-container)
   --dist-repo <o/r>       gitd-dist repo (default ChronicCmposer/gitd-dist)
 
-Environment: GITD_IMAGE_SHA256, GH_TOKEN, aws credentials.
+Environment: GITD_IMAGE_SHA256, authenticated gh CLI (gh auth login), aws credentials.
 HELP
             exit 0
             ;;
@@ -135,8 +139,9 @@ require_cmd aws
 require_cmd curl
 require_cmd sha256sum
 require_cmd base64
-require_cmd gh
-[[ -n "${GH_TOKEN:-}" ]] || die "GH_TOKEN must be set to publish gitd-container.tar"
+# Publish to GitHub needs gh installed AND authenticated — fail fast, never
+# silently skip a publish (code-philosophy).
+require_gh_auth
 
 # --- obtain the image tarball: prebuilt, or build it (R3-Q10) ---------------------
 if [[ -n "${IMAGE_TAR}" ]]; then

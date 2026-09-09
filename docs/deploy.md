@@ -15,8 +15,8 @@ boot. This script enforces that ordering with early `set -euo pipefail` exits.
 
 These must all be true before the first deploy:
 
-- **GitHub token.** `GH_TOKEN` set and exported in the environment, with
-  `repo` scope over `ChronicCmposer/gitd-dist` (used to publish
+- **Authenticated `gh` CLI.** `gh` installed and logged in (`gh auth login`),
+  with `repo` scope over `ChronicCmposer/gitd-dist` (used to publish
   `gitd-container.tar` to the `gitd-container` release).
 - **AWS credentials.** `aws` CLI configured with credentials for the deploy
   account/region (`us-east-2` by default). The instance role grants only
@@ -83,7 +83,8 @@ before anything else runs.
 `deploy.sh` runs these steps in order (R3-Q2/R3-Q3):
 
 1. **Validate inputs.** `aws`, `gh`, `sha256sum`, `tar` must be on PATH;
-   `GH_TOKEN` must be set; the image tarball, both host-binary tarballs, the
+   `gh` must be authenticated (`gh auth login`); the image tarball, both
+   host-binary tarballs, the
    configs, `userdata.sh`, `gitd-cert-sync.sh`, the containerd unit, and
    `config.toml` must all exist.
 2. **Compute artifact sha256 pins** (R6-Q3 discipline): the image, containerd,

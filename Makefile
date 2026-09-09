@@ -101,7 +101,7 @@ gen-dist-pins: ## Regenerate dist_pins.bzl from the built tarballs.
 	$(DIST)/gen-dist-pins.sh
 
 # publish-*-dist: upload a determinism-checked artifact to GitHub Releases
-# (primary) + S3 (fallback). Requires GH_TOKEN + aws credentials.
+# (primary) + S3 (fallback). Requires an authenticated gh CLI (gh auth login) + aws credentials.
 publish-openssh-dist: ## Publish the openssh dist artifact to GitHub + S3.
 	$(DIST)/publish-dist.sh openssh
 

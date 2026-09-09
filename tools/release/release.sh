@@ -14,10 +14,10 @@
 #   - produce tools/dist/out/gitd-container.tar via the existing image flow,
 #   - print the sha256 the operator uses as the out-of-band update pin (R6-Q3).
 #
-# Optional publish (only when GH_TOKEN is set): upload gitd-container.tar to
-# the gitd-container release on ChronicCmposer/gitd-dist. A skipped or failed
-# publish NEVER fails the build — the sha256 pin above is the deliverable, and
-# publishing is belt-and-braces for the artifact channel.
+# Optional publish (only when the gh CLI is authenticated): upload
+# gitd-container.tar to the gitd-container release on ChronicCmposer/gitd-dist.
+# A skipped or failed publish NEVER fails the build — the sha256 pin above is
+# the deliverable, and publishing is belt-and-braces for the artifact channel.
 
 set -euo pipefail
 
@@ -27,6 +27,9 @@ cd "${ROOT}"
 # Shared GPG signing/verification helpers (sign_artifact / verify_artifact).
 # shellcheck source=tools/release/sign-artifact.sh
 source "${ROOT}/tools/release/sign-artifact.sh"
+# Shared gh CLI auth guard (gh_auth) — gh reads its own stored credentials.
+# shellcheck source=tools/release/gh-auth.sh
+source "${ROOT}/tools/release/gh-auth.sh"
 
 # Fail fast: HEAD must be exactly a release tag, else the binary would embed
 # the dev fallback instead of a real version.
@@ -56,10 +59,8 @@ echo "gitd: release: ${tag}: build OK"
 echo "gitd: release: update pin (out-of-band, R6-Q3): ${sha256}"
 
 # Optional publish. Never fail the build over a skipped or failed publish.
-if [[ -z "${GH_TOKEN:-}" ]]; then
-    echo "gitd: release: GH_TOKEN not set; skipped publish (build + sha256 are the core). Set GH_TOKEN to publish gitd-container.tar to gitd-dist."
-elif ! command -v gh >/dev/null 2>&1; then
-    echo "gitd: release: gh not found in PATH; skipped publish (sha256 above is still the update pin)" >&2
+if ! gh_auth; then
+    echo "gitd: release: gh not installed or not authenticated (run 'gh auth login'); skipped publish (build + sha256 are the core)" >&2
 else
     if gh release view gitd-container --repo ChronicCmposer/gitd-dist >/dev/null 2>&1; then
         gh release upload gitd-container "${tar}" "${tar}.asc" --repo ChronicCmposer/gitd-dist --clobber \

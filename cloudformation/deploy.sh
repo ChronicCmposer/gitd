@@ -24,7 +24,7 @@
 #   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
 #   --gitd-release-tag <tag>     gitd-dist release tag (default gitd-container)
 #   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
-# Environment: GH_TOKEN required to publish the image release.
+# Environment: an authenticated gh CLI (gh auth login) to publish the image release.
 
 set -euo pipefail
 
@@ -50,6 +50,10 @@ die() {
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "required command '$1' not found in PATH"
 }
+# Shared gh CLI auth guard (gh_auth / require_gh_auth) — gh reads its own
+# stored credentials (GH_TOKEN, if set, is used by gh as an override).
+# shellcheck source=tools/release/gh-auth.sh
+source "${SCRIPT_DIR}/../tools/release/gh-auth.sh"
 
 # --- parse flags ---------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -81,7 +85,7 @@ Options:
   --gitd-release-tag <tag>     gitd-dist release tag (default gitd-container)
   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
 
-Environment: GH_TOKEN required to publish gitd-container.tar to the gitd-dist release.
+Environment: authenticated gh CLI (gh auth login) required to publish gitd-container.tar to the gitd-dist release.
 HELP
             exit 0
             ;;
@@ -94,10 +98,11 @@ done
 [[ -n "${EIP_ALLOCATION_ID}" ]] || die "--eip-allocation-id is required"
 
 require_cmd aws
-require_cmd gh
 require_cmd sha256sum
 require_cmd tar
-[[ -n "${GH_TOKEN:-}" ]] || die "GH_TOKEN must be set to publish gitd-container.tar"
+# Publish to GitHub needs gh installed AND authenticated — fail fast, never
+# silently skip a publish (code-philosophy).
+require_gh_auth
 
 # Shared GPG signing helpers (sign_artifact / verify_artifact) + the committed
 # pinned public key the bundle carries so the instance can verify provenance.

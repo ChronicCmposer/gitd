@@ -13,8 +13,9 @@ see `tools/dist/README.md` for the full pipeline layout.
 - Root on the build host (the openssh build runs in an Alpine **musl** chroot;
   `make check-openssh-dist-deps` enforces `id -u` == 0 and the presence of
   `curl` + `tar`).
-- A clean git checkout of this repo, a `GH_TOKEN` and `aws` credentials for
-  the publish step, network access to the chroot bases (Alpine mirror) and
+- A clean git checkout of this repo, an authenticated `gh` CLI (`gh auth
+  login`) and `aws` credentials for the publish step, network access to the
+  chroot bases (Alpine mirror) and
   upstream sources.
 - **Do not** touch the running server until the artifacts are built, verified,
   and `update.sh` is ready — OpenSSH rides in the image and ships with the
@@ -102,8 +103,9 @@ This uploads the determinism-checked artifact to the GitHub mirror tag
 **GPG-signed** (detached ASCII-armored `.asc`, operator key via `GPG_KEY_ID`)
 and the `.asc` is uploaded alongside on both channels — consumers (boot,
 update, and the Bazel fetch review flow) verify provenance against the
-committed public key `tools/release/gitd-signing-key.asc`. Requires `GH_TOKEN`
-+ `aws` CLI. Publishing is gated on having a checked artifact; an unpublished
+committed public key `tools/release/gitd-signing-key.asc`. Requires an
+authenticated `gh` CLI (`gh auth login`) + `aws` CLI. Publishing is gated on
+having a checked artifact; an unpublished
 or mis-pinned artifact would fail the Bazel fetch later.
 
 ## 7. Rebuild the image and update the sha256 pin

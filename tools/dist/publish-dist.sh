@@ -9,7 +9,7 @@
 #   - GitHub Releases:      ChronicCmposer/gitd-dist release tag <product>-<version>
 # GitHub Releases is the primary artifact source for Bazel (R3-Q2); S3 is the
 # fallback mirror. Requires: the determinism check passed, aws CLI credentials
-# for the bucket, and a GitHub token in GH_TOKEN.
+# for the bucket, and an authenticated gh CLI (gh auth login).
 #
 # S3 prefixes (2.4): openssh/ git/ fish/ containerd/ (runc rides containerd/).
 
@@ -22,6 +22,8 @@ source "${DIST_DIR}/versions.sh"
 source "${DIST_DIR}/lib.sh"
 # shellcheck source=tools/release/sign-artifact.sh
 source "${DIST_DIR}/../release/sign-artifact.sh"
+# shellcheck source=tools/release/gh-auth.sh
+source "${DIST_DIR}/../release/gh-auth.sh"
 
 PRODUCT="publish-dist"
 
@@ -51,9 +53,9 @@ src="${DIST_DIR}/out/${asset}"
 # product is ever uploaded.
 sign_artifact "${src}"
 
-# GitHub tag + asset upload (tar + .asc together).
-require_cmd gh
-[[ -n "${GH_TOKEN:-}" ]] || die "GH_TOKEN must be set to publish a GitHub release"
+# GitHub tag + asset upload (tar + .asc together). gh reads its own stored
+# credentials (GH_TOKEN, if set, is used by gh as an override).
+require_gh_auth
 tag="${product}-${version}"
 if gh release view "${tag}" --repo "${DIST_REPO}" >/dev/null 2>&1; then
     gh release upload "${tag}" "${src}" "${src}.asc" --repo "${DIST_REPO}" --clobber
