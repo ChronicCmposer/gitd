@@ -1,8 +1,20 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "config",
-    srcs = ["config.go"],
+    srcs = [
+        "config.go",
+        "duration.go",
+        "reload.go",
+        "webhooks.go",
+    ],
     importpath = "github.com/ChronicCmposer/gitd/internal/config",
     visibility = ["//:__subpackages__"],
+    deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
+)
+
+go_test(
+    name = "config_test",
+    srcs = ["config_test.go"],
+    embed = [":config"],
 )

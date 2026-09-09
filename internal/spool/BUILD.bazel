@@ -1,8 +1,20 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "spool",
-    srcs = ["spool.go"],
+    srcs = [
+        "retry.go",
+        "spool.go",
+        "uuid.go",
+    ],
     importpath = "github.com/ChronicCmposer/gitd/internal/spool",
     visibility = ["//:__subpackages__"],
+    deps = ["//internal/event"],
+)
+
+go_test(
+    name = "spool_test",
+    srcs = ["spool_test.go"],
+    embed = [":spool"],
+    deps = ["//internal/event"],
 )

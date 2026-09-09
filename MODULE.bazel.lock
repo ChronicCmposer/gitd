@@ -259,11 +259,9 @@
   "moduleExtensions": {
     "//:dist.bzl%dist": {
       "general": {
-        "bzlTransitiveDigest": "OcAle3JppU3PH6Sr8RgcaY1D2RaGLWdEpI0J2QNt4YA=",
+        "bzlTransitiveDigest": "TARqVT7dKLZI0vOOV6bCeaHAhfvvbvDoPCWmh/Q/g0w=",
         "usagesDigest": "s6U9n4Khr0gUS1QYkwKwoqMXdKkGikvFObPN3QKasj4=",
-        "recordedInputs": [
-          "REPO_MAPPING:,bazel_tools bazel_tools"
-        ],
+        "recordedInputs": [],
         "generatedRepoSpecs": {
           "openssh_dist": {
             "repoRuleId": "@@//:dist.bzl%dist_artifact",

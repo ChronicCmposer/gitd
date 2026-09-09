@@ -1,0 +1,14 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "disk",
+    srcs = ["disk.go"],
+    importpath = "github.com/ChronicCmposer/gitd/internal/disk",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "disk_test",
+    srcs = ["disk_test.go"],
+    embed = [":disk"],
+)

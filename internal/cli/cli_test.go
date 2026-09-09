@@ -55,10 +55,10 @@ func TestRunDispatch(t *testing.T) {
 			wantErr:  "gitd: unknown command \"bogus\"",
 		},
 		{
-			name:     "stub verb exits with runtime error",
-			args:     []string{"serve"},
+			name:     "spool without config fails at runtime not usage",
+			args:     []string{"spool", "list"},
 			wantCode: ExitError,
-			wantErr:  "gitd: serve: not implemented in this phase",
+			wantErr:  "gitd: spool:",
 		},
 		{
 			name:     "usage lists every command",

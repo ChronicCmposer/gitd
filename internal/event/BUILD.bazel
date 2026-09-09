@@ -1,8 +1,14 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "event",
     srcs = ["event.go"],
     importpath = "github.com/ChronicCmposer/gitd/internal/event",
     visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "event_test",
+    srcs = ["event_test.go"],
+    embed = [":event"],
 )

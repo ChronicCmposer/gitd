@@ -1,8 +1,30 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "serve",
     srcs = ["serve.go"],
     importpath = "github.com/ChronicCmposer/gitd/internal/serve",
     visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/config",
+        "//internal/mirror",
+        "//internal/repo",
+        "//internal/socket",
+        "//internal/spool",
+    ],
+)
+
+go_test(
+    name = "serve_test",
+    srcs = ["serve_test.go"],
+    embed = [":serve"],
+    deps = [
+        "//internal/config",
+        "//internal/event",
+        "//internal/gitenv",
+        "//internal/mirror",
+        "//internal/objectstore",
+        "//internal/socket",
+        "//internal/spool",
+    ],
 )

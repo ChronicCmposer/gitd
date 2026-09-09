@@ -1,0 +1,14 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "socket",
+    srcs = ["socket.go"],
+    importpath = "github.com/ChronicCmposer/gitd/internal/socket",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "socket_test",
+    srcs = ["socket_test.go"],
+    embed = [":socket"],
+)

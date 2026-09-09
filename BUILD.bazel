@@ -5,7 +5,13 @@
 # gazelle:prefix github.com/ChronicCmposer/gitd
 # gazelle:exclude bazel-*
 
+load("@bazel_gazelle//:def.bzl", "gazelle")
+
 package(default_visibility = ["//visibility:public"])
+
+# Gazelle target: `bazel run //:gazelle` regenerates BUILD.bazel files from
+# the Go sources (R1-Q13: gazelle 0.54.0 + rules_go 0.63.0).
+gazelle(name = "gazelle")
 
 # The dist artifacts and module scaffolding have no Go sources at the root.
 # Gazelle adds targets here as Go code is added at the root (currently none).

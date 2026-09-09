@@ -1,8 +1,27 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "sshcmd",
-    srcs = ["sshcmd.go"],
+    srcs = [
+        "gateway.go",
+        "identity.go",
+        "sshcmd.go",
+        "tokenize.go",
+    ],
     importpath = "github.com/ChronicCmposer/gitd/internal/sshcmd",
     visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/disk",
+        "//internal/gitenv",
+        "//internal/repo",
+    ],
+)
+
+go_test(
+    name = "sshcmd_test",
+    srcs = [
+        "identity_test.go",
+        "tokenize_test.go",
+    ],
+    embed = [":sshcmd"],
 )

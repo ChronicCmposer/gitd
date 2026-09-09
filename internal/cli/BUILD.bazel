@@ -4,6 +4,7 @@ go_library(
     name = "cli",
     srcs = [
         "cli.go",
+        "common.go",
         "ddns.go",
         "mirror.go",
         "notify.go",
@@ -14,12 +15,39 @@ go_library(
     ],
     importpath = "github.com/ChronicCmposer/gitd/internal/cli",
     visibility = ["//:__subpackages__"],
-    deps = ["//internal/version"],
+    deps = [
+        "//internal/config",
+        "//internal/disk",
+        "//internal/event",
+        "//internal/gitenv",
+        "//internal/mirror",
+        "//internal/objectstore",
+        "//internal/objectstore/s3",
+        "//internal/repo",
+        "//internal/serve",
+        "//internal/socket",
+        "//internal/spool",
+        "//internal/sshcmd",
+        "//internal/version",
+    ],
 )
 
 go_test(
     name = "cli_test",
-    srcs = ["cli_test.go"],
+    srcs = [
+        "cli_test.go",
+        "notify_test.go",
+    ],
     embed = [":cli"],
-    deps = ["//internal/version"],
+    deps = [
+        "//internal/config",
+        "//internal/disk",
+        "//internal/event",
+        "//internal/gitenv",
+        "//internal/mirror",
+        "//internal/objectstore",
+        "//internal/socket",
+        "//internal/spool",
+        "//internal/version",
+    ],
 )

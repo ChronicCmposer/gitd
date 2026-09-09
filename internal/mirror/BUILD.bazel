@@ -1,8 +1,23 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "mirror",
     srcs = ["mirror.go"],
     importpath = "github.com/ChronicCmposer/gitd/internal/mirror",
     visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/gitenv",
+        "//internal/objectstore",
+        "//internal/repo",
+    ],
+)
+
+go_test(
+    name = "mirror_test",
+    srcs = ["mirror_test.go"],
+    embed = [":mirror"],
+    deps = [
+        "//internal/gitenv",
+        "//internal/objectstore",
+    ],
 )

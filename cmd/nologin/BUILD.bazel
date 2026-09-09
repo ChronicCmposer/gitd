@@ -1,12 +1,18 @@
 # nologin shell for the from-scratch image (R2-Q3).
 
-load("@io_bazel_rules_go//go:def.bzl", "go_binary")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
 
 package(default_visibility = ["//visibility:public"])
 
 go_binary(
     name = "nologin",
-    srcs = ["main.go"],
+    embed = [":nologin_lib"],
     pure = "on",
     static = "on",
+)
+
+go_library(
+    name = "nologin_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/ChronicCmposer/gitd/cmd/nologin",
 )
