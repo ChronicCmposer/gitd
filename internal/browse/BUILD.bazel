@@ -1,8 +1,47 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "browse",
-    srcs = ["browse.go"],
+    srcs = [
+        "browse.go",
+        "embed.go",
+        "fragments.go",
+        "git.go",
+        "helpers.go",
+        "markdown.go",
+        "middleware.go",
+        "pages.go",
+        "readme.go",
+        "templates.go",
+        "tls.go",
+    ],
+    embedsrcs = glob(["static/**"]),
     importpath = "github.com/ChronicCmposer/gitd/internal/browse",
     visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/gitenv",
+        "//internal/repo",
+        "//internal/serve",
+        "@com_github_alecthomas_chroma_v2//formatters/html",
+        "@com_github_yuin_goldmark//:goldmark",
+        "@com_github_yuin_goldmark//extension",
+        "@com_github_yuin_goldmark_highlighting_v2//:goldmark-highlighting",
+    ],
+)
+
+go_test(
+    name = "browse_test",
+    srcs = [
+        "browse_test.go",
+        "testcerts_test.go",
+    ],
+    embed = [":browse"],
+    deps = [
+        "//internal/config",
+        "//internal/gitenv",
+        "//internal/mirror",
+        "//internal/objectstore",
+        "//internal/serve",
+        "//internal/spool",
+    ],
 )

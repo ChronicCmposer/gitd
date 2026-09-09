@@ -3,11 +3,12 @@
 // sweeps, verifies) plus the unix-socket HTTP server (R11-Q6) that notify and
 // gitd spool replay submit into (R9-Q11, R10-Q2, R12-Q2).
 //
-// The webhook delivery engine itself lands in Phase 4; this package exposes
-// the Deliver seam (a func injected at construction) and the 404 unknown
-// plugin-id reply (R13-Q8). All channel submissions wait up to 10s for a slot
-// then reply 503 busy (R12-Q1); notify's 60s socket client timeout (R11-Q3)
-// is the outer bound.
+// Delivery executes through the injected Deliver seam (a func built from the
+// webhook plugin registry); unknown plugin-ids reply 404-style (R13-Q8). The
+// same control mux (/v1/bundle, /v1/deliver) is exposed via SocketHandler so
+// the browse :443 mux can mount it (Phase 5). All channel submissions wait up
+// to 10s for a slot then reply 503 busy (R12-Q1); notify's 60s socket client
+// timeout (R11-Q3) is the outer bound.
 package serve
 
 import (
@@ -49,6 +50,14 @@ var ErrBusy = errors.New("serve: actions channel busy")
 
 // ErrShuttingDown reports a submission made after shutdown began.
 var ErrShuttingDown = errors.New("serve: shutting down")
+
+// TestSetSubmitWait shrinks the busy-wait for tests (R12-Q1) and returns a
+// restore func. Test-only seam; production uses the 10s default.
+func TestSetSubmitWait(d time.Duration) func() {
+	old := submitWait
+	submitWait = d
+	return func() { submitWait = old }
+}
 
 // Config wires the serve process. All fields are required.
 type Config struct {
@@ -162,6 +171,17 @@ func (s *Serve) Run(ctx context.Context) error {
 	}
 	return nil
 }
+
+// Submit queues act for the worker, waiting up to submitWait (R12-Q1). It is
+// the exported seam browse render actions use (R11-Q2) so all serve-side work
+// — renders, bundle uploads, deliveries — flows through the same channel.
+func (s *Serve) Submit(act func(*Serve)) error { return s.submit(act) }
+
+// SocketHandler returns the mux for the socket control endpoints (/v1/bundle,
+// /v1/deliver). It is mounted on the unix-socket server (Run) and behind the
+// browse :443 mux (Phase 5) so both paths keep the actions-channel discipline
+// and the R13-Q9 read-header/body caps.
+func (s *Serve) SocketHandler() http.Handler { return s.handler() }
 
 // submit queues act for the worker, waiting up to submitWait (R12-Q1). It
 // never blocks past shutdown: done closed makes the select bail out.

@@ -1,0 +1,269 @@
+/* git.cmposer.cc browse UI — Gruvbox original dark theme (frontend-philosophy:
+ * committed color, monospace identity, atmospheric depth, controlled density).
+ * Palette: bg0 #282828, bg1 #3c3836, fg #ebdbb2, red #fb4934, green #b8bb26,
+ * yellow #fabd2f, blue #83a598, purple #d3869b, aqua #8ec07c, orange #fe8019.
+ */
+:root {
+  --bg0: #282828;
+  --bg1: #3c3836;
+  --bg2: #504945;
+  --bg3: #665c54;
+  --fg0: #fbf1c7;
+  --fg1: #ebdbb2;
+  --fg2: #d5c4a1;
+  --fg3: #bdae93;
+  --gray: #928374;
+  --red: #fb4934;
+  --green: #b8bb26;
+  --yellow: #fabd2f;
+  --blue: #83a598;
+  --purple: #d3869b;
+  --aqua: #8ec07c;
+  --orange: #fe8019;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "Iosevka",
+               "Source Code Pro", "SF Mono", Menlo, Consolas, monospace;
+  --border: 1px solid var(--bg2);
+}
+
+* { box-sizing: border-box; }
+
+html { height: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(131,165,152,0.08), transparent 60%),
+    radial-gradient(900px 500px at 110% 0%, rgba(254,128,25,0.06), transparent 55%),
+    var(--bg0);
+  color: var(--fg1);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+a { color: var(--blue); text-decoration: none; }
+a:hover { color: var(--aqua); text-decoration: underline; }
+
+/* Masthead */
+.mast {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1rem 1.5rem;
+  border-bottom: var(--border);
+  background: linear-gradient(180deg, var(--bg1), var(--bg0));
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.wordmark {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--fg0);
+  font-size: 15px;
+  border-right: var(--border);
+  padding-right: 1.25rem;
+}
+.wordmark::before { content: "❯ "; color: var(--orange); }
+.render-tag {
+  margin-left: auto;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gray);
+  border: var(--border);
+  border-radius: 3px;
+  padding: 0.2rem 0.5rem;
+  background: var(--bg1);
+}
+
+.stage { max-width: 1080px; margin: 0 auto; padding: 1.5rem; }
+
+/* Repo index */
+.repo-index h1, .repo-home h1, .page-head h1 {
+  font-size: 20px;
+  color: var(--fg0);
+  font-weight: 700;
+  border-bottom: var(--border);
+  padding-bottom: 0.6rem;
+  margin: 0 0 1rem;
+}
+.repo-list { list-style: none; margin: 0; padding: 0; }
+.repo-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0.9rem;
+  border-bottom: var(--border);
+  transition: background 0.15s ease, padding-left 0.15s ease;
+}
+.repo-list li:hover { background: var(--bg1); padding-left: 1.2rem; }
+.repo-list .name { font-weight: 600; color: var(--fg0); }
+.repo-list .name::before { content: "▸ "; color: var(--yellow); }
+.repo-list .meta { color: var(--gray); font-size: 12px; }
+
+/* Ref selector + tabs */
+.refbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0 0 1rem;
+}
+.refsel select {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg1);
+  background: var(--bg1);
+  border: var(--border);
+  border-radius: 3px;
+  padding: 0.3rem 0.5rem;
+}
+.tabs { display: flex; gap: 0.25rem; }
+.tabs a {
+  padding: 0.35rem 0.8rem;
+  border: var(--border);
+  border-radius: 3px 3px 0 0;
+  color: var(--fg2);
+  background: var(--bg1);
+}
+.tabs a.active { background: var(--bg0); color: var(--fg0); border-bottom: 2px solid var(--orange); }
+.tabs a:hover { color: var(--fg0); text-decoration: none; }
+
+/* Panels */
+.panel {
+  border: var(--border);
+  border-radius: 4px;
+  background: var(--bg0);
+  overflow: hidden;
+  margin: 0 0 1.25rem;
+}
+.panel-title {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gray);
+  padding: 0.5rem 0.9rem;
+  border-bottom: var(--border);
+  background: linear-gradient(180deg, var(--bg1), var(--bg0));
+}
+.panel-body { padding: 0.9rem; }
+.panel-body > *:first-child { margin-top: 0; }
+.panel-body > *:last-child { margin-bottom: 0; }
+
+/* Commit log */
+.commit-list { list-style: none; margin: 0; padding: 0; }
+.commit-list li {
+  display: flex;
+  gap: 0.9rem;
+  align-items: baseline;
+  padding: 0.55rem 0.9rem;
+  border-bottom: var(--border);
+}
+.commit-list li:last-child { border-bottom: none; }
+.commit-list li:hover { background: var(--bg1); }
+.commit-hash { color: var(--purple); font-size: 12px; min-width: 7em; }
+.commit-msg { color: var(--fg1); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-meta { color: var(--gray); font-size: 12px; text-align: right; }
+
+/* Tree */
+.tree-list { list-style: none; margin: 0; padding: 0; }
+.tree-list li {
+  padding: 0.4rem 0.9rem;
+  border-bottom: var(--border);
+  display: flex;
+  gap: 0.6rem;
+}
+.tree-list li:last-child { border-bottom: none; }
+.tree-list li:hover { background: var(--bg1); }
+.tree-type { color: var(--aqua); width: 1.5em; }
+.tree-type.dir { color: var(--yellow); }
+.tree-link { color: var(--fg1); }
+.tree-link:hover { color: var(--aqua); text-decoration: none; }
+
+/* README / rendered markdown */
+.readme { padding: 0; }
+.readme .markdown {
+  padding: 1.1rem 1.3rem;
+  overflow-x: auto;
+}
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 {
+  color: var(--fg0);
+  border-bottom: var(--border);
+  padding-bottom: 0.3rem;
+}
+.markdown code { background: var(--bg1); border-radius: 3px; padding: 0.1rem 0.3rem; font-size: 0.92em; }
+.markdown pre {
+  background: var(--bg0);
+  border: var(--border);
+  border-left: 3px solid var(--orange);
+  border-radius: 3px;
+  padding: 0.8rem;
+  overflow-x: auto;
+}
+.markdown pre code { background: none; padding: 0; }
+.markdown blockquote { border-left: 3px solid var(--bg3); margin-left: 0; padding-left: 1rem; color: var(--fg2); }
+.markdown table { border-collapse: collapse; margin: 0.6rem 0; }
+.markdown th, .markdown td { border: var(--border); padding: 0.4rem 0.7rem; }
+.markdown th { background: var(--bg1); color: var(--fg0); }
+.markdown a { color: var(--orange); }
+.markdown del { color: var(--gray); }
+.markdown input[type="checkbox"] { accent-color: var(--aqua); }
+
+/* Code diff */
+.diff { white-space: pre-wrap; font-size: 12.5px; padding: 0; }
+.diff pre { margin: 0; padding: 0.9rem; overflow-x: auto; }
+.diff .add { color: var(--green); }
+.diff .del { color: var(--red); }
+.diff .meta { color: var(--gray); }
+
+/* Blob view */
+.blob { white-space: pre-wrap; font-size: 12.5px; padding: 0.9rem; overflow-x: auto; }
+
+/* Empty repo + notices */
+.empty-repo { text-align: left; padding: 1.2rem; }
+.empty-repo .hint {
+  background: var(--bg0);
+  border: var(--border);
+  border-left: 3px solid var(--yellow);
+  border-radius: 3px;
+  padding: 0.9rem;
+  margin: 0.8rem 0;
+  overflow-x: auto;
+}
+.empty-repo code { color: var(--yellow); }
+.notice {
+  background: rgba(254,128,25,0.12);
+  border: 1px solid var(--orange);
+  color: var(--fg2);
+  border-radius: 3px;
+  padding: 0.6rem 0.9rem;
+  margin: 0.9rem 0;
+}
+.error {
+  background: rgba(251,73,52,0.12);
+  border: 1px solid var(--red);
+  color: var(--red);
+  border-radius: 3px;
+  padding: 0.9rem;
+}
+
+/* Pagination */
+.pager { display: flex; gap: 0.75rem; padding: 0.8rem 0.9rem; }
+.pager a { color: var(--blue); }
+
+/* Footer */
+.footer {
+  text-align: center;
+  color: var(--gray);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  padding: 1.5rem 0 2rem;
+  border-top: var(--border);
+  margin-top: 1.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}

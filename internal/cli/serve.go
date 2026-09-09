@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ChronicCmposer/gitd/internal/browse"
 	"github.com/ChronicCmposer/gitd/internal/config"
 	"github.com/ChronicCmposer/gitd/internal/disk"
 	"github.com/ChronicCmposer/gitd/internal/gitenv"
@@ -24,6 +25,9 @@ import (
 	_ "github.com/ChronicCmposer/gitd/internal/webhook/plugins/http"
 	_ "github.com/ChronicCmposer/gitd/internal/webhook/plugins/logger"
 )
+
+// browseAddr is the mTLS listen address (Phase 5).
+const browseAddr = ":443"
 
 // runServe runs the git gateway service (3.1-3.7). One binary, two roles
 // (R10-Q1, R12-Q5):
@@ -103,5 +107,37 @@ func runServe(args []string, _, _ io.Writer) error {
 		VerifyInterval:    gitd.Mirror.VerifyInterval.D(),
 		ActionsBufferSize: int(gitd.Serve.ActionsBufferSize),
 	})
-	return srv.Run(ctx)
+
+	// Phase 5: the :443 mTLS browse UI. Render actions submit into the serve
+	// actions channel (R11-Q2); the mTLS material reloads per handshake
+	// (R5-Q6, R7-Q5). Fail-fast startup on missing/invalid TLS files.
+	tlsCfg, err := browse.NewTLSConfig(browse.TLSPaths{
+		Cert:           gitd.TLS.Cert,
+		Key:            gitd.TLS.Key,
+		ClientCA:       gitd.TLS.ClientCA,
+		RevocationList: gitd.TLS.RevocationList,
+	})
+	if err != nil {
+		return err
+	}
+	bh, err := browse.New(browse.Config{
+		ReposRoot:     reposRoot,
+		Git:           git,
+		Render:        gitd.Render,
+		Serve:         srv,
+		HostAllowlist: gitd.HostAllowlist,
+		TLS:           tlsCfg,
+		Log:           log,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Run the actions-channel daemon (socket server + catch-up/sweep/verify)
+	// and the browse mTLS server as one process (Phase 5). If either fails,
+	// cancel ctx and return; the deferred stop() shuts the other down.
+	errCh := make(chan error, 2)
+	go func() { errCh <- srv.Run(ctx) }()
+	go func() { errCh <- bh.Run(ctx, browseAddr) }()
+	return <-errCh
 }
