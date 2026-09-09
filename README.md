@@ -96,6 +96,29 @@ make image-container                         # gitd-container.tar for ctr images
 make deploy ARGS="--key-name KP --eip-allocation-id EIP"   # CloudFormation deploy
 ```
 
+### Versioning & releases (R1-Q11/Q14)
+
+Git **tags are the source of truth** for versioning. The version is injected at
+**link time** via Bazel stamping — `workspace-status.sh` emits `STABLE_VERSION`
+(the exact release tag at `HEAD`, else `v0.0.0-devel`), `.bazelrc` sets
+`build --stamp`, and the `gitd` binaries carry an `x_defs` that substitutes the
+value into `internal/version.Version` at link time. There is
+**no generated version code**; `go run ./cmd/gitd version` reports the
+`v0.0.0-devel` dev fallback, while a stamped build embeds the real tag.
+
+```sh
+make version                          # print the current version (tag at HEAD or v0.0.0-devel)
+make bump-version LEVEL=patch         # tag the next vX.Y.Z (major|minor|patch) + push to origin
+make release                          # build the stamped binary + gitd-container.tar, print the update pin sha256
+```
+
+`make release` **requires `HEAD` to be exactly a release tag** (`git describe
+--tags --exact-match` must succeed) so the binary embeds the exact tag — run
+`make bump-version` first. It builds the stamped binary and image, prints the
+sha256 you use as the **out-of-band update pin** for `make update` (R6-Q3), and
+optionally publishes `gitd-container.tar` to the `gitd-dist` release when
+`GH_TOKEN` is set (a skipped/failed publish never fails the build).
+
 ### Running the CLI locally
 
 All dispatch lives in `internal/cli`; entry point `cmd/gitd/main.go`.

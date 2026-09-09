@@ -16,8 +16,11 @@ test --test_output=errors
 build --color=yes
 test --color=yes
 
-# Version stamping (R1-Q11): placeholder for the release pipeline. Link-time
-# version injection (workspace-status.sh + x_defs + --stamp) is wired in the
-# release phase; until then internal/version returns its v0.0.0-devel default.
-# Uncomment when the release pipeline lands:
-# build --stamp
+# Version stamping (R1-Q11/Q14). Link-time version injection: workspace-status.sh
+# emits STABLE_VERSION (the exact release tag at HEAD, else v0.0.0-devel), and
+# rules_go substitutes it into the gitd binary via x_defs ({STABLE_VERSION})
+# when stamping is enabled. --stamp turns the workspace-status pipeline on
+# (rules_go's go_config.stamp is selected from the --stamp flag); the status
+# command itself is what produces the STABLE_VERSION key.
+build --stamp
+build --workspace_status_command=./tools/release/workspace-status.sh

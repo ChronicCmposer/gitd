@@ -32,7 +32,11 @@ to push a routine upgrade to a live server.
    binaries — each through `make <product>-dist` with the determinism gate,
    then `make image-container` to produce
    `tools/dist/out/gitd-container.tar` (`docs/openssh-upgrade.md`,
-   `tools/dist/README.md`). Note the resulting sha256.
+   `tools/dist/README.md`). For a normal versioned release use the coordinated
+   path instead: `make bump-version LEVEL=<major|minor|patch>` then
+   `make release`, which builds the stamped `gitd` binary from the exact tag,
+   produces the same `gitd-container.tar`, and prints the sha256. Note the
+   resulting sha256.
 2. **Upload the artifacts** to the artifact channel — GitHub Releases (primary,
    `gitd-container` tag) and/or `s3://git.cmposer.cc/image/` — so the host can
    fetch them.

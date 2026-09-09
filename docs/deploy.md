@@ -28,7 +28,9 @@ These must all be true before the first deploy:
   (`tools/dist/`, see `tools/dist/README.md`) must have produced and published
   the host binaries (`containerd-*.linux-<arch>.tar.gz`,
   `runc-*.linux-<arch>.tar.gz` under `tools/dist/out/`) and the OCI image
-  (`tools/dist/out/gitd-container.tar`, via `make image-container`). `deploy.sh`
+  (`tools/dist/out/gitd-container.tar`, via `make image-container`, or via the
+  versioned `make bump-version LEVEL=<major|minor|patch>` + `make release`
+  flow — see the README "Versioning & releases" section). `deploy.sh`
   fails fast if these are missing (see step 2).
 - **EC2 keypair name** that already exists in the region (passed with
   `--key-name`). It trails `cloudformation/stack.yaml`'s

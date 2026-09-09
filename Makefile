@@ -14,7 +14,8 @@ MUTATION := tools/mutation
         check-pinned-go-dist check-openssh-dist-deps gen-dist-pins \
         publish-openssh-dist publish-git-dist publish-fish-dist \
         publish-sudo-dist publish-ca-certs-dist publish-containerd-dist \
-        publish-runc-dist image image-container deploy update check-deps
+        publish-runc-dist image image-container deploy update check-deps \
+        version bump-version release
 
 build: ## Build everything.
 	bazel build //...
@@ -116,3 +117,17 @@ deploy: ## Deploy the stack via CloudFormation (Phase 7). Usage: make deploy ARG
 
 update: ## In-place update of a live server (Phase 8.1, R3-Q10/R6-Q3). Usage: make update ARGS="--sha256 <hex>"
 	./cloudformation/update.sh $(ARGS)
+
+# --- Versioning & releases (R1-Q11/Q14) ---------------------------------------
+
+# Git tags are the source of truth for versioning; the version is injected at
+# link time via bazel stamping (workspace-status.sh -> STABLE_VERSION -> x_defs),
+# never generated. These three targets are the version/release facade.
+version: ## Print the current version (exact release tag at HEAD, else v0.0.0-devel).
+	@git describe --tags --exact-match 2>/dev/null || echo v0.0.0-devel
+
+bump-version: ## Tag the next release (git tags are the source of truth). Usage: make bump-version LEVEL=<major|minor|patch>
+	./tools/release/bump-version.sh $(LEVEL)
+
+release: ## Build + publish a release from the exact-tagged HEAD. Requires an exact tag at HEAD; prints the update pin sha256.
+	./tools/release/release.sh

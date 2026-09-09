@@ -24,3 +24,10 @@ cloudformation/out/
 # --- Phase 9 mutation reports: generated, uploaded as CI artifacts, not source --
 # make mutate / mutate-ci write go-mutesting-*.json + report.json here by default.
 gitd-mutation-reports/
+
+# --- Bazel output symlinks: never committed, never a source change --------------
+# bazel build creates bazel-bin/ bazel-out/ bazel-testlogs/ bazel-<workspace>/ at
+# the repo root. They must never be committed, and must never count as "dirty"
+# for the bump-version clean-tree guard (R1-Q11), so ignore them here rather than
+# relying on a local .git/info/exclude on the dev box.
+bazel-*

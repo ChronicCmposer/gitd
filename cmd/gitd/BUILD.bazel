@@ -8,9 +8,17 @@ go_library(
     deps = ["//internal/cli"],
 )
 
+# Link-time version stamping (R1-Q11/Q14): rules_go substitutes {STABLE_VERSION}
+# (from workspace-status.sh, enabled by build --stamp in .bazelrc) into the
+# binary at link time via x_defs, overriding the v0.0.0-devel initializer. No
+# generated code — the version lives only in the tag + this link-time
+# substitution.
 go_binary(
     name = "gitd",
     embed = [":gitd_lib"],
+    x_defs = {
+        "github.com/ChronicCmposer/gitd/internal/version.Version": "{STABLE_VERSION}",
+    },
     visibility = ["//visibility:public"],
 )
 
@@ -22,5 +30,8 @@ go_binary(
     embed = [":gitd_lib"],
     pure = "on",
     static = "on",
+    x_defs = {
+        "github.com/ChronicCmposer/gitd/internal/version.Version": "{STABLE_VERSION}",
+    },
     visibility = ["//visibility:public"],
 )
