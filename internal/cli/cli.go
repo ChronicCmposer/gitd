@@ -61,7 +61,7 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 	for _, cmd := range commands {
 		if cmd.name == verb {
 			if err := cmd.run(argv[1:], stdout, stderr); err != nil {
-				fmt.Fprintf(stderr, "gitd: %s: %v\n", verb, err)
+				_, _ = fmt.Fprintf(stderr, "gitd: %s: %v\n", verb, err)
 				var ue *usageError
 				if errors.As(err, &ue) {
 					return ExitUsage
@@ -72,19 +72,19 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	fmt.Fprintf(stderr, "gitd: unknown command %q\n", verb)
+	_, _ = fmt.Fprintf(stderr, "gitd: unknown command %q\n", verb)
 	usage(stderr)
 	return ExitUsage
 }
 
 // usage writes the command summary to w.
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: gitd <command> [args]")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "commands:")
+	_, _ = fmt.Fprintln(w, "usage: gitd <command> [args]")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "commands:")
 	for _, cmd := range commands {
-		fmt.Fprintf(w, "  %-12s %s\n", cmd.name, cmd.summary)
+		_, _ = fmt.Fprintf(w, "  %-12s %s\n", cmd.name, cmd.summary)
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "exit codes: 0 ok, 1 runtime error, 2 usage error")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "exit codes: 0 ok, 1 runtime error, 2 usage error")
 }

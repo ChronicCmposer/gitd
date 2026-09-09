@@ -70,8 +70,8 @@ func (m *Mirror) CreateBundle(ctx context.Context, repoName string) (BundleResul
 		return BundleResult{}, fmt.Errorf("mirror create %s: temp: %w", repoName, err)
 	}
 	tmpName := tmp.Name()
-	tmp.Close()
-	defer os.Remove(tmpName)
+	_ = tmp.Close()
+	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := m.git.RunIn(ctx, repoDir, "bundle", "create", tmpName, "--all"); err != nil {
 		return BundleResult{}, fmt.Errorf("mirror create %s: bundle: %w", repoName, err)
@@ -243,15 +243,15 @@ func (m *Mirror) download(ctx context.Context, key string) (string, func(), erro
 	}
 	name := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(name)
+		_ = tmp.Close()
+		_ = os.Remove(name)
 		return "", nil, fmt.Errorf("mirror download %s: write: %w", key, err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(name)
+		_ = os.Remove(name)
 		return "", nil, fmt.Errorf("mirror download %s: close: %w", key, err)
 	}
-	return name, func() { os.Remove(name) }, nil
+	return name, func() { _ = os.Remove(name) }, nil
 }
 
 // bundleKey builds "repos/<repo>/<RFC3339 with '-' for ':'>, nanoseconds>.bundle"

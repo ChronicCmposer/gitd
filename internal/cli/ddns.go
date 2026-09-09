@@ -52,7 +52,7 @@ func runDDNS(args []string, _, _ io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("ddns: update: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body := make([]byte, 512)
 	n, _ := resp.Body.Read(body)
 	reply := strings.TrimSpace(string(body[:n]))

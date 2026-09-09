@@ -321,7 +321,7 @@ func (h *Handler) handleRaw(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(fileBase(tp)))
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // handleDiff renders a commit diff, capped at 256KiB with a raw download link
@@ -353,7 +353,7 @@ func (h *Handler) handleDiff(w http.ResponseWriter, r *http.Request) {
 		// Raw download link serves the FULL diff (R11-Q9), untruncated.
 		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(commit+".diff"))
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write(diff)
+		_, _ = w.Write(diff)
 		return
 	}
 	// Page display is capped at 256KiB (R11-Q9).
@@ -378,5 +378,5 @@ func (h *Handler) handleDiff(w http.ResponseWriter, r *http.Request) {
 
 func writeHTML(w http.ResponseWriter, body []byte) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(body)
+	_, _ = w.Write(body)
 }

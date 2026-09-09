@@ -115,7 +115,7 @@ func (p *Plugin) Deliver(ctx context.Context, ev *event.Event) error {
 	if err != nil {
 		return fmt.Errorf("http deliver %s: %w", target, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// Response body capped at 1MiB and closed immediately (R7-Q1); bodies
 	// are never logged (R3-Q1).
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))

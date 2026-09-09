@@ -40,12 +40,12 @@ func subcommandFor(bin string) (string, error) {
 // missing gitd or an unknown hook name fails loudly with exit 1.
 func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(argv) == 0 {
-		fmt.Fprintln(stderr, "gitd: hookshim: no argv[0]; expected pre-receive or post-receive")
+		_, _ = fmt.Fprintln(stderr, "gitd: hookshim: no argv[0]; expected pre-receive or post-receive")
 		return 1
 	}
 	sub, err := subcommandFor(argv[0])
 	if err != nil {
-		fmt.Fprintln(stderr, "gitd:", err)
+		_, _ = fmt.Fprintln(stderr, "gitd:", err)
 		return 1
 	}
 
@@ -57,7 +57,7 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return exitErr.ExitCode()
 		}
-		fmt.Fprintf(stderr, "gitd: hookshim: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "gitd: hookshim: %v\n", err)
 		return 1
 	}
 	return 0

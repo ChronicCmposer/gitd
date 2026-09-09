@@ -152,7 +152,7 @@ func TestWebhooksPathFor(t *testing.T) {
 
 // usageError must satisfy error and be As-able (Run maps it to ExitUsage).
 func TestUsageErrorIsError(t *testing.T) {
-	var err error = errUsage("boom %d", 1)
+	err := errUsage("boom %d", 1)
 	if !errors.Is(err, err) {
 		t.Fatal("errUsage not errors.Is-able with itself")
 	}

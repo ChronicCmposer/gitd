@@ -208,8 +208,8 @@ func (s *Store) writeAtomic(path string, rec *Record) error {
 	}
 	tmpName := tmp.Name()
 	cleanup := func() {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 	}
 
 	if err := tmp.Chmod(0o600); err != nil {
@@ -225,11 +225,11 @@ func (s *Store) writeAtomic(path string, rec *Record) error {
 		return fmt.Errorf("fsync temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("close temp: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename: %w", err)
 	}
 	if err := fsyncDir(s.dir); err != nil {
@@ -244,6 +244,6 @@ func fsyncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	return d.Sync()
 }

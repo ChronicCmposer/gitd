@@ -69,7 +69,7 @@ func (c *Client) Bundle(ctx context.Context, repo string) (BundleResult, error) 
 	if err != nil {
 		return BundleResult{}, fmt.Errorf("socket %s /v1/bundle: %w", c.path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	reply, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return BundleResult{}, fmt.Errorf("socket /v1/bundle: read reply: %w", err)
@@ -109,7 +109,7 @@ func (c *Client) Deliver(ctx context.Context, pluginID, eventID string) error {
 	if err != nil {
 		return fmt.Errorf("socket %s /v1/deliver: %w", c.path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		reply, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return fmt.Errorf("socket /v1/deliver: %s: %s", resp.Status, trim(string(reply)))
