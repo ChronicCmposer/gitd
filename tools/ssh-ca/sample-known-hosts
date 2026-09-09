@@ -1,0 +1,11 @@
+# tools/ssh-ca/sample-known-hosts — committed reference @cert-authority line (6.3).
+#
+# One line appended to ~/.ssh/known_hosts. It trusts the gitd SSH CA to sign
+# the host key for git.cmposer.cc, so there is NO first-connect TOFU prompt and
+# the server's identity is pinned to this CA (R10-Q10: host cert principals =
+# hostname only, so connect via the hostname, never the EIP).
+#
+# The <SSH_CA_PUBLIC_KEY> placeholder is the output of `ssh-ca init` (the
+# ~/.ssh/gitd-ca/ssh-ca.pub contents). setup-client.sh substitutes it for you.
+
+@cert-authority git.cmposer.cc <SSH_CA_PUBLIC_KEY>

@@ -1,1 +1,16 @@
+# --- plans are internal; never commit them ---
 plans/
+
+# --- CA custody + issued certs (R3-Q3, R3-Q4, R12-Q7): never in VCS ---
+# The CA keypairs live in ~/.ssh/gitd-ca/ (outside this repo, 0600) and the
+# client keypairs live in ~/.ssh/, so neither can enter the tree. Only the
+# following generated material can land in the repo and must be ignored:
+#
+#   tools/ssh-ca issue-host output (Ed25519 host key + cert + public key)
+host/
+#
+#   pki/ generated TLS keys/certs are ignored by pki/.gitignore (the committed
+#   pki/*.sh scripts + systemd/ units stay tracked)
+#
+#   ddns password files must never be committed
+*ddns-password*

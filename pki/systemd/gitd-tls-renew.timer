@@ -1,0 +1,14 @@
+[Unit]
+Description=Monthly gitd TLS server cert renewal
+
+[Timer]
+# Run on the 1st of each month at 04:15 local time. The server cert is valid
+# 90d (R12-Q6 decision table); monthly renewal keeps it comfortably inside the
+# window while riding the client-side renewal flow (client timer -> SSM ->
+# host gitd-cert-sync, R12-Q6).
+OnCalendar=*-*-01 04:15:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

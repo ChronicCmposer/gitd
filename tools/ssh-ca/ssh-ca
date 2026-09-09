@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# tools/ssh-ca/ssh-ca — gitd SSH Certificate Authority tool.
+#
+# Issues OpenSSH certificates over the local CA whose keypair lives in
+# ~/.ssh/gitd-ca/ (R3-Q4, R12-Q7: passphrase-less 0600, gitignored, never
+# leaves this box).
+#
+# Subcommands:
+#   init                    create the CA keypair + CA cert in ~/.ssh/gitd-ca/
+#   issue-user  [--admin] <pubkey>
+#                           issue a 90d user cert over an Ed25519 auth key;
+#                           --admin grants principals git,admin, else principal git
+#   issue-host  [OUT_DIR]   generate an Ed25519 host key + 1y host cert
+#                           (principals = git.cmposer.cc only, R10-Q10)
+#   renew       <cert.pub>  re-issue an existing cert with a fresh validity
+#                           window (SSH user renewal + host renewal, R12-Q6)
+#   revoke      <pubkey>    append a key to /etc/ssh/revoked_keys (R2-Q4)
+#
+# Cert lifetimes and key types are constants (see lib.sh); the tool refuses
+# any key that is not Ed25519 or any cert that would exceed the fixed
+# validity — fail-fast, no silent partial success.
+
+set -euo pipefail
+
+# shellcheck source=tools/ssh-ca/lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+# usage prints the help text and exits 2 (usage error per the CLI convention).
+usage() {
+    cat <<'EOF'
+usage: ssh-ca <command> [args]
+
+commands:
+  init
+      Create the CA keypair + CA cert under ~/.ssh/gitd-ca/ (Ed25519, 0600).
+
+  issue-user [--admin] <pubkey>
+      Issue a 90d user cert over the Ed25519 key <pubkey>.
+      --admin  sign with principals 'git,admin' (R2-Q14); default 'git'.
+
+  issue-host [OUT_DIR]
+      Generate an Ed25519 host key + 1y host cert in OUT_DIR
+      (default: ./host). Principals = git.cmposer.cc only (R10-Q10).
+
+  renew <cert.pub>
+      Re-issue the cert <cert.pub> with a fresh validity window, preserving
+      its principals and identity (same CA).
+
+  revoke <pubkey>
+      Append the Ed25519 public key <pubkey> to /etc/ssh/revoked_keys (R2-Q4).
+
+exit codes: 0 ok / 1 runtime error / 2 usage error
+EOF
+    exit 2
+}
+
+# sub_require_ca is a small guard so every command except init needs the CA.
+sub_require_ca() {
+    require_ca
+}
+
+# --- init ---------------------------------------------------------------------
+
+cmd_init() {
+    local dir ca ca_pub
+    dir="$(ca_dir)"
+    ca="${dir}/ssh-ca"
+    ca_pub="${ca}.pub"
+
+    require_cmd ssh-keygen
+    mkdir -p "${dir}"
+    chmod 0700 "${dir}"
+
+    # Refuse to clobber an existing CA (fail-fast; a real CA is never silently
+    # overwritten).
+    [[ -f "${ca}" || -f "${ca_pub}" ]] \
+        && die "CA already exists at ${dir}; refusing to overwrite (delete it manually to re-key)"
+
+    ssh-keygen -t ed25519 -f "${ca}" -N "" -C "gitd SSH CA (git.cmposer.cc)" >/dev/null
+    chmod_key "${ca}"
+
+    # SSH CA keys carry no X.509 certificate; the self-signed .pub IS the CA
+    # identity. Copy it so the layout mirrors the TLS CA (key + cert) for
+    # clarity.
+    cp "${ca_pub}" "${dir}/ssh-ca.cert.pub"
+    chmod 0644 "${dir}/ssh-ca.cert.pub"
+
+    echo "gitd: ssh-ca: CA created at ${dir}"
+    echo "gitd: ssh-ca: TrustedUserCAKeys line for the server:"
+    cat "${ca_pub}"
+    echo "gitd: ssh-ca: @cert-authority line for the client known_hosts:"
+    printf '@cert-authority git.cmposer.cc %s\n' "$(cat "${ca_pub}")"
+}
+
+# --- issue-user ---------------------------------------------------------------
+
+# cmd_issue_user issues a 90d user cert. --admin selects principals
+# git,admin (R2-Q14); the default is principal git (the gateway user).
+cmd_issue_user() {
+    local admin=0 pub
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --admin) admin=1; shift ;;
+            -*) usage ;;
+            *) break ;;
+        esac
+    done
+    [[ $# -eq 1 ]] || usage
+    pub="$1"
+
+    sub_require_ca
+    require_cmd ssh-keygen
+    [[ -f "${pub}" ]] || die "public key not found: ${pub}"
+    enforce_keytype "${pub}"
+
+    local dir identity principals identity_comment
+    dir="$(ca_dir)"
+    identity="$(basename "${pub}")"
+    identity="${identity%.pub}"
+    if [[ "${admin}" -eq 1 ]]; then
+        principals="git,admin"
+        identity_comment="gitd admin cert for ${identity}"
+    else
+        principals="git"
+        identity_comment="gitd user cert for ${identity}"
+    fi
+
+    # 90d validity with a small backdate for clock skew; the tool enforces the
+    # lifetime rather than accepting a caller-supplied one (fail-fast).
+    ssh-keygen -s "${dir}/ssh-ca" \
+        -I "${identity}" \
+        -n "${principals}" \
+        -V "${VALIDITY_BACKDATE}:+${USER_CERT_VALIDITY}" \
+        -O "clear" \
+        -z "${RANDOM}${RANDOM}" \
+        -C "${identity_comment}" \
+        "${pub}" >/dev/null
+
+    echo "gitd: ssh-ca: user cert issued (${USER_CERT_LABEL}, principals '${principals}'):"
+    echo "gitd: ssh-ca:   ${pub%.pub}-cert.pub"
+    echo "gitd: ssh-ca: install with:"
+    echo "gitd: ssh-ca:   install -m 0600 \"${pub%.pub}-cert.pub\" ~/.ssh/"
+}
+
+# --- issue-host ---------------------------------------------------------------
+
+# cmd_issue_host generates an Ed25519 host key + 1y host cert whose only
+# principal is git.cmposer.cc (R10-Q10). Ed25519 only, no RSA/ECDSA/DSA
+# (R13-Q3).
+cmd_issue_host() {
+    local out="${1:-host}"
+    sub_require_ca
+    require_cmd ssh-keygen
+    mkdir -p "${out}"
+
+    local host_key host_pub host_cert dir
+    host_key="${out}/ssh_host_ed25519_key"
+    host_pub="${host_key}.pub"
+    host_cert="${host_key}-cert.pub"
+    dir="$(ca_dir)"
+
+    [[ -f "${host_key}" ]] \
+        && die "host key already exists at ${host_key}; refusing to overwrite"
+    [[ -f "${host_cert}" ]] \
+        && die "host cert already exists at ${host_cert}; refusing to overwrite"
+
+    ssh-keygen -t ed25519 -f "${host_key}" -N "" -C "gitd host key ${GITD_HOST}" >/dev/null
+    chmod_key "${host_key}"
+    enforce_keytype "${host_pub}"
+
+    # Principals = hostname ONLY (R10-Q10); a single -n, never EIP.
+    ssh-keygen -s "${dir}/ssh-ca" \
+        -h \
+        -I "gitd-${GITD_HOST}" \
+        -n "${GITD_HOST}" \
+        -V "${VALIDITY_BACKDATE}:+${HOST_CERT_VALIDITY}" \
+        -O "clear" \
+        -z "${RANDOM}${RANDOM}" \
+        -C "gitd host cert ${GITD_HOST}" \
+        "${host_pub}" >/dev/null
+
+    echo "gitd: ssh-ca: host key + cert issued (${HOST_CERT_LABEL}, principal '${GITD_HOST}' only):"
+    echo "gitd: ssh-ca:   ${host_key}          (0600, private)"
+    echo "gitd: ssh-ca:   ${host_pub}          (public)"
+    echo "gitd: ssh-ca:   ${host_cert}         (signed cert, principal ${GITD_HOST})"
+    echo "gitd: ssh-ca: install the host key/cert to SSM via cloudformation/upload-certs.sh"
+}
+
+# cert_identity extracts the Key ID from an OpenSSH cert (ssh-keygen -L).
+cert_identity() {
+    ssh-keygen -L -f "$1" | sed -n 's/^ *Key ID: "\(.*\)"$/\1/p'
+}
+
+# cert_principals extracts the comma-joined principal list from an OpenSSH
+# cert. ssh-keygen -L prints "Principals:" on its own line, then one deeply
+# indented line per principal, then the next section header; we collect the
+# indented lines and stop at the following header.
+cert_principals() {
+    ssh-keygen -L -f "$1" | awk '
+        /^ *Principals:/ { in_p=1; next }
+        in_p && /^ *Critical Options:/ { exit }
+        in_p && /^ *Extensions:/ { exit }
+        in_p { gsub(/^ +/,""); printf "%s%s", sep, $0; sep="," }
+    '
+}
+
+# cert_is_host returns 0 (true) when the cert is a host certificate.
+cert_is_host() {
+    ssh-keygen -L -f "$1" | grep -q '^ *Type: .* host certificate$'
+}
+
+# --- renew --------------------------------------------------------------------
+
+# cmd_renew re-signs an existing certificate with a fresh validity window,
+# preserving its principals and identity (R12-Q6: user + annual host renewal).
+cmd_renew() {
+    [[ $# -eq 1 ]] || usage
+    local cert="$1"
+    sub_require_ca
+    require_cmd ssh-keygen
+    [[ -f "${cert}" ]] || die "certificate not found: ${cert}"
+
+    # Renewal works off the underlying public key, not the cert.
+    local key
+    key="${cert%-cert.pub}.pub"
+    [[ -f "${key}" ]] || die "underlying public key not found: ${key} (expected ${key})"
+
+    local principals identity is_host
+    principals="$(cert_principals "${cert}")"
+    identity="$(cert_identity "${cert}")"
+    is_host=0
+    if cert_is_host "${cert}"; then is_host=1; fi
+
+    [[ -n "${principals}" ]] || die "could not read principals from ${cert}"
+    [[ -n "${identity}" ]] || die "could not read identity from ${cert}"
+
+    local dir validity host_flag validity_label
+    dir="$(ca_dir)"
+    if [[ "${is_host}" -eq 1 ]]; then
+        validity="+${HOST_CERT_VALIDITY}"
+        validity_label="${HOST_CERT_LABEL}"
+        host_flag=(-h)
+    else
+        validity="+${USER_CERT_VALIDITY}"
+        validity_label="${USER_CERT_LABEL}"
+        host_flag=()
+    fi
+
+    ssh-keygen -s "${dir}/ssh-ca" \
+        "${host_flag[@]}" \
+        -I "${identity}" \
+        -n "${principals}" \
+        -V "${VALIDITY_BACKDATE}:${validity}" \
+        -O "clear" \
+        -z "${RANDOM}${RANDOM}" \
+        "${key}" >/dev/null
+
+    echo "gitd: ssh-ca: renewed cert (${validity_label}) for identity '${identity}' principals '${principals}':"
+    echo "gitd: ssh-ca:   ${cert}"
+}
+
+# --- revoke -------------------------------------------------------------------
+
+# cmd_revoke appends an Ed25519 public key to /etc/ssh/revoked_keys (R2-Q4),
+# which the server's RevokedKeys directive then refuses to authenticate.
+cmd_revoke() {
+    [[ $# -eq 1 ]] || usage
+    local pub="$1"
+    require_cmd ssh-keygen
+    [[ -f "${pub}" ]] || die "public key not found: ${pub}"
+    enforce_keytype "${pub}"
+
+    local revoked="/etc/ssh/revoked_keys"
+    [[ -w "$(dirname "${revoked}")" ]] || die "need write access to $(dirname "${revoked}") to append to ${revoked}"
+
+    # Fail-fast on a duplicate so a key is never listed twice.
+    if [[ -f "${revoked}" ]] && grep -Fq "$(cat "${pub}")" "${revoked}"; then
+        die "key already present in ${revoked}; nothing to revoke"
+    fi
+
+    mkdir -p "$(dirname "${revoked}")"
+    cat "${pub}" >> "${revoked}"
+    chmod 0644 "${revoked}"
+    echo "gitd: ssh-ca: revoked $(ssh-keygen -lf "${pub}" | awk '{print $2}') — appended to ${revoked}"
+}
+
+# --- dispatch -----------------------------------------------------------------
+
+[[ $# -ge 1 ]] || usage
+case "$1" in
+    init)       shift; cmd_init "$@" ;;
+    issue-user) shift; cmd_issue_user "$@" ;;
+    issue-host) shift; cmd_issue_host "$@" ;;
+    renew)      shift; cmd_renew "$@" ;;
+    revoke)     shift; cmd_revoke "$@" ;;
+    *) usage ;;
+esac

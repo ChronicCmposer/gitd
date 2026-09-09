@@ -1,0 +1,13 @@
+[Unit]
+Description=Renew gitd TLS server cert and push to SSM
+# Renewal needs network + the user's aws credentials (SSM PutParameter).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Replace __REPO_ROOT__ with the absolute path of this repo checkout.
+ExecStart=__REPO_ROOT__/pki/renew-server-cert.sh
+
+[Install]
+WantedBy=default.target

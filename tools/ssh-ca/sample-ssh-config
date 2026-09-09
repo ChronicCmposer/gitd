@@ -1,0 +1,14 @@
+# tools/ssh-ca/sample-ssh-config — committed reference block (6.3).
+#
+# Append to ~/.ssh/config (setup-client.sh does this for you). The dedicated
+# client keypair ~/.ssh/gitd_ed25519 is used ONLY for git.cmposer.cc so the
+# gitd cert is never offered to github.com (R2-Q14). IdentitiesOnly prevents
+# ssh from trying other keys on this host.
+
+Host git.cmposer.cc
+    HostName git.cmposer.cc
+    User git
+    IdentityFile ~/.ssh/gitd_ed25519
+    IdentitiesOnly yes
+    CertificateFile ~/.ssh/gitd_ed25519-cert.pub
+    ServerAliveInterval 60
