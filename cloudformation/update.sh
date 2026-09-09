@@ -46,6 +46,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Shared GPG signing/verification helpers + the committed pinned public key the
+# host uses to verify the fetched image's provenance.
+# shellcheck source=tools/release/sign-artifact.sh
+source "${REPO_ROOT}/tools/release/sign-artifact.sh"
+SIGNING_KEY="${REPO_ROOT}/tools/release/gitd-signing-key.asc"
+
 # --- defaults ------------------------------------------------------------------
 SHA256=""
 IMAGE_TAR=""
@@ -149,25 +155,31 @@ echo "gitd: update: verifying local tarball ${IMAGE_TAR} against pinned sha256"
 verify_sha256 "${SHA256}" "${IMAGE_TAR}"
 echo "gitd: update: local sha256 OK: ${SHA256}"
 
+# GPG-sign the image before publishing: the host refuses any image whose .asc
+# it cannot verify against the pinned public key. sign_artifact fails loudly.
+[[ -f "${SIGNING_KEY}" ]] || die "pinned GPG signing key not found: ${SIGNING_KEY}"
+sign_artifact "${IMAGE_TAR}"
+
 # --- publish to the artifact channel, idempotently (R3-Q2) -------------------------
-# GitHub Releases primary + S3 fallback; skip re-uploading an already-published
-# asset so re-runs don't churn the release.
+# GitHub Releases primary + S3 fallback; upload tar + .asc together. Skip
+# re-uploading an already-published asset so re-runs don't churn the release.
 if gh release view "${GITD_RELEASE_TAG}" --repo "${DIST_REPO}" >/dev/null 2>&1; then
     if gh release view "${GITD_RELEASE_TAG}" --repo "${DIST_REPO}" \
         --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "gitd-container.tar"; then
         echo "gitd: update: gitd-container.tar already on ${DIST_REPO}@${GITD_RELEASE_TAG}; skipping upload"
     else
-        gh release upload "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" --repo "${DIST_REPO}" --clobber
-        echo "gitd: update: uploaded gitd-container.tar to ${DIST_REPO}@${GITD_RELEASE_TAG}"
+        gh release upload "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" "${IMAGE_TAR}.asc" --repo "${DIST_REPO}" --clobber
+        echo "gitd: update: uploaded gitd-container.tar + .asc to ${DIST_REPO}@${GITD_RELEASE_TAG}"
     fi
 else
-    gh release create "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" --repo "${DIST_REPO}" \
+    gh release create "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" "${IMAGE_TAR}.asc" --repo "${DIST_REPO}" \
         --title "gitd OCI image" \
-        --notes "gitd-container.tar (R3-Q2). sha256: ${SHA256}"
-    echo "gitd: update: created ${DIST_REPO}@${GITD_RELEASE_TAG} and uploaded gitd-container.tar"
+        --notes "gitd-container.tar (R3-Q2). sha256: ${SHA256}. GPG-signed (gitd-signing-key.asc)."
+    echo "gitd: update: created ${DIST_REPO}@${GITD_RELEASE_TAG} and uploaded gitd-container.tar + .asc"
 fi
 aws s3 cp "${IMAGE_TAR}" "s3://${BUCKET}/image/gitd-container.tar" --region "${REGION}" --only-show-errors
-echo "gitd: update: image published to ${DIST_REPO}@${GITD_RELEASE_TAG} + s3://${BUCKET}/image/"
+aws s3 cp "${IMAGE_TAR}.asc" "s3://${BUCKET}/image/gitd-container.tar.asc" --region "${REGION}" --only-show-errors
+echo "gitd: update: image published to ${DIST_REPO}@${GITD_RELEASE_TAG} + s3://${BUCKET}/image/ (tar + .asc)"
 
 # --- resolve the instance (stack, unless overridden) --------------------------------
 if [[ -z "${INSTANCE_ID}" ]]; then
@@ -180,30 +192,61 @@ fi
 echo "gitd: update: target instance ${INSTANCE_ID}"
 
 # --- the host-side script (run as root over SSM, host plane, R2-Q16) --------------
-# Generated here with the pin + artifact URLs baked in (the pin is the operator's
-# out-of-band value carried forward, never fetched from the channel). Base64 is
-# used as the transport envelope so no shell/JSON quoting survives the trip.
+# Generated here with the pin + artifact URLs + pinned GPG public key baked in
+# (the pin is the operator's out-of-band value carried forward, never fetched
+# from the channel; the pubkey is public and committed in-repo). Base64 is used
+# as the transport envelope so no shell/JSON quoting survives the trip.
+SIGNING_PUBKEY="$(cat "${SIGNING_KEY}")"
 build_remote_body() {
     cat <<REMOTE_EOF
 set -euo pipefail
 EXPECTED_SHA='${SHA256}'
 REGION='${REGION}'
 GITHUB_IMAGE_URL='https://github.com/${DIST_REPO}/releases/download/${GITD_RELEASE_TAG}/gitd-container.tar'
+GITHUB_IMAGE_ASC_URL='\${GITHUB_IMAGE_URL}.asc'
 S3_IMAGE_URL='s3://${BUCKET}/image/gitd-container.tar'
+S3_IMAGE_ASC_URL='s3://${BUCKET}/image/gitd-container.tar.asc'
 TAR='/opt/gitd-container.tar'
-echo "gitd: update: fetching gitd-container.tar (GitHub primary, S3 fallback)"
-rm -f "\$TAR.dl"
+SIG="\${TAR}.asc"
+PINNED_PUBKEY='/opt/gitd-signing-key.asc'
+die() { echo "gitd: update: \$*" >&2; exit 1; }
+# The pinned public key (committed at tools/release/gitd-signing-key.asc) is
+# carried into the remote body by the operator-side script; it is public, so
+# carrying it inline leaks nothing. It is written to a temp file for gpg.
+cat > "\$PINNED_PUBKEY" <<'GPGKEY'
+${SIGNING_PUBKEY}
+GPGKEY
+# GPG verification is REQUIRED (provenance on top of the pinned sha256). Install
+# gnupg2 if absent; fail fast if it still cannot verify.
+command -v gpg >/dev/null 2>&1 || { echo "gitd: update: gpg not found; installing gnupg2" >&2; dnf install -y -q gnupg2; }
+command -v gpg >/dev/null 2>&1 || die "gpg still missing after install; cannot verify artifact provenance"
+echo "gitd: update: fetching gitd-container.tar + .asc (GitHub primary, S3 fallback)"
+rm -f "\$TAR.dl" "\$SIG.dl"
 if curl -fsSL --retry 3 --connect-timeout 15 "\$GITHUB_IMAGE_URL" -o "\$TAR.dl"; then
-    mv "\$TAR.dl" "\$TAR"
-    echo "gitd: update: fetched from GitHub Releases (${GITD_RELEASE_TAG})"
+    curl -fsSL --retry 3 --connect-timeout 15 "\$GITHUB_IMAGE_ASC_URL" -o "\$SIG.dl" \\
+        || die "image from GitHub but signature \$GITHUB_IMAGE_ASC_URL missing; refusing unsigned image"
+    mv "\$TAR.dl" "\$TAR"; mv "\$SIG.dl" "\$SIG"
+    echo "gitd: update: fetched from GitHub Releases (${GITD_RELEASE_TAG}) + .asc"
 elif aws s3 cp "\$S3_IMAGE_URL" "\$TAR.dl" --region "\$REGION" --only-show-errors; then
-    mv "\$TAR.dl" "\$TAR"
-    echo "gitd: update: fetched from S3 fallback"
+    aws s3 cp "\$S3_IMAGE_ASC_URL" "\$SIG.dl" --region "\$REGION" --only-show-errors \\
+        || die "image from S3 but signature \$S3_IMAGE_ASC_URL missing; refusing unsigned image"
+    mv "\$TAR.dl" "\$TAR"; mv "\$SIG.dl" "\$SIG"
+    echo "gitd: update: fetched from S3 fallback + .asc"
 else
     rm -f "\$TAR.dl"
     echo "gitd: update: ERROR: could not fetch gitd-container.tar from GitHub or S3" >&2
     exit 1
 fi
+[[ -s "\$TAR" ]] || die "gitd-container.tar empty after download"
+# GPG provenance first (against the pinned key), then the pinned sha256.
+VHOME=\$(mktemp -d)
+trap 'rm -rf "\$VHOME"' EXIT
+gpg --homedir "\$VHOME" --batch --quiet --import "\$PINNED_PUBKEY" \\
+    || die "failed to import pinned GPG public key"
+gpg --homedir "\$VHOME" --batch --quiet --verify "\$SIG" "\$TAR" \\
+    || die "GPG signature verification FAILED for \$TAR; provenance not proven — aborting"
+rm -rf "\$VHOME"; trap - EXIT
+echo "gitd: update: GPG signature verified (pinned key)"
 ACTUAL=\$(sha256sum "\$TAR" | cut -d' ' -f1)
 [[ "\$ACTUAL" == "\$EXPECTED_SHA" ]] || {
     echo "gitd: update: sha256 MISMATCH for \$TAR: expected \$EXPECTED_SHA, got \$ACTUAL; aborting (R6-Q3)" >&2

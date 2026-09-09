@@ -50,6 +50,12 @@ make gen-dist-pins
 make publish-openssh-dist publish-git-dist ...
 ```
 
+`publish-dist.sh` **GPG-signs** each artifact before upload (detached
+ASCII-armored `.asc`, operator key via `GPG_KEY_ID`) and uploads the `.asc`
+alongside the tarball on both channels, so consumers can prove provenance
+against the committed public key `tools/release/gitd-signing-key.asc`
+(fail-fast if signing fails — no unsigned dist product is ever published).
+
 Requirements: root (chroot builds), network, `curl`, `tar`, `openssl`
 (ca-certificates), `gh` + `GH_TOKEN` and `aws` CLI (publish only). The alpine
 and AL2023 chroots are cached under `.cache/` and reused across builds for
@@ -90,6 +96,9 @@ Bucket `git.cmposer.cc`, region `us-east-2`:
 | `ca-certs/` | `ca-certificates-20260611-r0.linux-<arch>.tar.gz` |
 | `containerd/` | `containerd-2.3.5.linux-<arch>.tar.gz`, `runc-1.2.9.linux-<arch>.tar.gz` |
 | `image/` | `gitd-container.tar` (rules_oci image tarball, published to the `gitd-dist` release tag) |
+
+Every artifact above is published with its detached GPG signature
+(`<artifact>.asc`) in the same prefix / release.
 
 GitHub mirror tags on `ChronicCmposer/gitd-dist`: `openssh-10.5p1`,
 `git-2.53.0`, `fish-4.9.3`, `sudo-1.9.17p2`, `ca-certificates-20260611-r0`,

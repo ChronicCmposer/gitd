@@ -251,26 +251,54 @@ chown root:root /etc/gitd/revoked_keys && chmod 0644 /etc/gitd/revoked_keys
 chmod 0700 /etc/gitd/tls
 
 # --- fetch + verify + import the OCI image (R3-Q2) ---------------------------------
-# Primary: GitHub Releases; fallback: S3 (image/ prefix). Either way the pinned
-# sha256 must match or boot aborts. Constant-time-ish fixed-length compare via
-# verify_sha256.
+# Primary: GitHub Releases; fallback: S3 (image/ prefix); final fallback: the
+# bundle copy. Whichever source wins, the image is GPG-verified against the
+# bundle's pinned public key (provenance) BEFORE the pinned sha256 (integrity),
+# then imported. Any missing signature or verify mismatch aborts boot — a
+# hardened trust chain never falls through to an unsigned image.
+GPG_KEY_PIN="${BUNDLE_DIR}/gitd-signing-key.asc"
+# Shared GPG verify helper packaged into the bundle by deploy.sh.
+# shellcheck source=/dev/null
+source "${BUNDLE_DIR}/sign-artifact.sh"
+[[ -f "${GPG_KEY_PIN}" ]] || die "pinned GPG signing key missing from bundle: ${GPG_KEY_PIN}"
+
+# GPG verification is REQUIRED (provenance on top of the pinned sha256). Ensure
+# gnupg2 is present; if it is still missing after install, fail fast rather than
+# silently trusting the image.
+if ! command -v gpg >/dev/null 2>&1; then
+    echo "gitd: image: gpg not found; installing gnupg2 (required for signature verification)" >&2
+    dnf install -y -q gnupg2
+fi
+require_cmd gpg
+
 IMAGE_TAR="${BUNDLE_DIR}/gitd-container.tar"
 GITHUB_IMAGE_URL="https://github.com/ChronicCmposer/gitd-dist/releases/download/${GITD_RELEASE_TAG}/gitd-container.tar"
+GITHUB_IMAGE_ASC_URL="${GITHUB_IMAGE_URL}.asc"
 S3_IMAGE_URL="s3://${BUCKET}/image/gitd-container.tar"
-# Primary: GitHub Releases; fallback: S3; final fallback: the bundle copy (7.3).
-# Either way the pinned sha256 must match or boot aborts (constant-time-ish
-# fixed-length compare via verify_sha256).
+S3_IMAGE_ASC_URL="s3://${BUCKET}/image/gitd-container.tar.asc"
+# Primary: GitHub Releases; fallback: S3; final fallback: the bundle copy. Either
+# way the image and its detached .asc must both land from the SAME source; an
+# image whose signature cannot be fetched is refused outright.
 if curl -fsSL --retry 3 --connect-timeout 15 "${GITHUB_IMAGE_URL}" -o "${IMAGE_TAR}.dl"; then
+    curl -fsSL --retry 3 --connect-timeout 15 "${GITHUB_IMAGE_ASC_URL}" -o "${IMAGE_TAR}.asc.dl" \
+        || die "fetched gitd-container.tar from GitHub but its signature ${GITHUB_IMAGE_ASC_URL} is missing; refusing to trust an unsigned image"
     mv "${IMAGE_TAR}.dl" "${IMAGE_TAR}"
-    echo "gitd: image: downloaded from GitHub Releases (${GITD_RELEASE_TAG})"
+    mv "${IMAGE_TAR}.asc.dl" "${IMAGE_TAR}.asc"
+    echo "gitd: image: downloaded from GitHub Releases (${GITD_RELEASE_TAG}) + .asc"
 elif aws s3 cp "${S3_IMAGE_URL}" "${IMAGE_TAR}.dl" --region "${REGION}" --only-show-errors 2>/dev/null; then
+    aws s3 cp "${S3_IMAGE_ASC_URL}" "${IMAGE_TAR}.asc.dl" --region "${REGION}" --only-show-errors 2>/dev/null \
+        || die "fetched gitd-container.tar from S3 but its signature ${S3_IMAGE_ASC_URL} is missing; refusing to trust an unsigned image"
     mv "${IMAGE_TAR}.dl" "${IMAGE_TAR}"
-    echo "gitd: image: downloaded from S3 fallback"
+    mv "${IMAGE_TAR}.asc.dl" "${IMAGE_TAR}.asc"
+    echo "gitd: image: downloaded from S3 fallback + .asc"
 else
     echo "gitd: image: GitHub/S3 fetch failed; using bundle copy"
+    [[ -s "${IMAGE_TAR}.asc" ]] || die "bundle copy of gitd-container.tar has no .asc signature; refusing to trust an unsigned image"
 fi
-rm -f "${IMAGE_TAR}.dl"
+rm -f "${IMAGE_TAR}.dl" "${IMAGE_TAR}.asc.dl"
 [[ -s "${IMAGE_TAR}" ]] || die "gitd-container.tar is empty after download"
+# Order: GPG provenance first, then the pinned sha256, then import.
+verify_artifact "${IMAGE_TAR}" "${GPG_KEY_PIN}"
 verify_sha256 "${IMAGE_SHA256}" "${IMAGE_TAR}"
 ctr images import "${IMAGE_TAR}" || die "ctr images import failed"
 ctr images ls | grep -q "git.cmposer.cc/gitd:latest" || die "image import did not register git.cmposer.cc/gitd:latest"

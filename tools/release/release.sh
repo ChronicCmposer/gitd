@@ -24,6 +24,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
+# Shared GPG signing/verification helpers (sign_artifact / verify_artifact).
+# shellcheck source=tools/release/sign-artifact.sh
+source "${ROOT}/tools/release/sign-artifact.sh"
+
 # Fail fast: HEAD must be exactly a release tag, else the binary would embed
 # the dev fallback instead of a real version.
 tag="$(git describe --tags --exact-match 2>/dev/null || true)"
@@ -44,6 +48,10 @@ make image-container
 tar="tools/dist/out/gitd-container.tar"
 [[ -f "${tar}" ]] || { echo "gitd: release: image tarball not found at ${tar}; image-container did not produce it" >&2; exit 1; }
 sha256="$(sha256sum "${tar}" | awk '{print $1}')"
+# Sign the image BEFORE publishing or printing the pin: every released artifact
+# carries a detached .asc (provenance on top of the pinned sha256, R3-Q2). The
+# .asc is produced even when the publish step is skipped so it is kept locally.
+sign_artifact "${tar}"
 echo "gitd: release: ${tag}: build OK"
 echo "gitd: release: update pin (out-of-band, R6-Q3): ${sha256}"
 
@@ -54,12 +62,12 @@ elif ! command -v gh >/dev/null 2>&1; then
     echo "gitd: release: gh not found in PATH; skipped publish (sha256 above is still the update pin)" >&2
 else
     if gh release view gitd-container --repo ChronicCmposer/gitd-dist >/dev/null 2>&1; then
-        gh release upload gitd-container "${tar}" --repo ChronicCmposer/gitd-dist --clobber \
+        gh release upload gitd-container "${tar}" "${tar}.asc" --repo ChronicCmposer/gitd-dist --clobber \
             || echo "gitd: release: WARNING: publish upload failed; sha256 above is still the update pin" >&2
     else
-        gh release create gitd-container "${tar}" --repo ChronicCmposer/gitd-dist \
+        gh release create gitd-container "${tar}" "${tar}.asc" --repo ChronicCmposer/gitd-dist \
             --title "gitd ${tag}" \
-            --notes "gitd-container.tar built from ${tag}. Update pin sha256: ${sha256}" \
+            --notes "gitd-container.tar built from ${tag}. Update pin sha256: ${sha256}. GPG-signed (gitd-signing-key.asc)." \
             || echo "gitd: release: WARNING: publish create failed; sha256 above is still the update pin" >&2
     fi
 fi

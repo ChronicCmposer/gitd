@@ -92,16 +92,20 @@ before anything else runs.
    parameters the instance verifies at boot.
 3. **Build the deployment bundle.** The bundle is staged from `userdata.sh`,
    `gitd.yaml`, `webhooks.yaml`, the host-binary tarballs,
-   `containerd.service`, `config.toml`, `gitd-cert-sync.sh`, and the image
-   tarball, then tarballed deterministically
+   `containerd.service`, `config.toml`, `gitd-cert-sync.sh`, the image
+   tarball **plus its `.asc`**, the **pinned GPG public key**
+   (`tools/release/gitd-signing-key.asc`), and the shared `sign-artifact.sh`
+   verify helper, then tarballed deterministically
    (`tar --sort=name --owner=0 --group=0 --numeric-owner`, gzip). A sha256 is
    taken over the tarball and it is stored in the bundle dir as
    `gitd-bundle-<sha256>.tar.gz` and uploaded to
    `s3://<bucket>/bundles/gitd-bundle-<sha256>.tar.gz`.
 4. **Publish the image** to the `gitd-container` release on
    `ChronicCmposer/gitd-dist` (create if absent, `--clobber` upload if present)
-   and to `s3://<bucket>/image/gitd-container.tar`. The pinned `IMAGE_SHA256`
-   is recorded in the release notes.
+   and to `s3://<bucket>/image/gitd-container.tar`. The image is GPG-signed
+   first (`gitd-container.tar.asc`, operator key) and the `.asc` is uploaded
+   alongside to both channels. The pinned `IMAGE_SHA256` is recorded in the
+   release notes.
 5. **Push certs to SSM** via `cloudformation/upload-certs.sh` (R3-Q3) — the
    TLS server material, the probe client cert, the SSH host key/cert, and the
    SSH CA public key, all SecureString under `/gitd/*`, encrypted with the
@@ -117,26 +121,38 @@ The stack write is otherwise standard CloudFormation (self-contained VPC, SG
 22+443 open / egress 443-only, one t4g.nano AL2023 arm64 instance behind the
 EIP, versioned SSE-S3 bucket with 30d noncurrent + 7d multipart lifecycle).
 
-## 3. Artifact sha256 pin flow
+## 3. Artifact integrity + provenance flow
 
-Integrity is a pinned-sha256 contract end to end (R3-Q2):
+Integrity is a pinned-sha256 contract end to end (R3-Q2), with **GPG artifact
+provenance layered ON TOP** (supersedes the plan's R3-Q2 "no signature"
+decision — the pinned hash remains the primary trust anchor; the detached GPG
+signature adds who-signed-it):
 
 - `deploy.sh` hashes every payload it carries and passes the pins as
   CloudFormation **parameters** (`BundleSha256`, `ImageSha256`,
-  `ContainerdSha256`, `RuncSha256`, plus `RepoRefSha`).
+  `ContainerdSha256`, `RuncSha256`, plus `RepoRefSha`). It then **GPG-signs**
+  `gitd-container.tar` (detached ASCII-armored `gitd-container.tar.asc`, using
+  the operator's key — `GPG_KEY_ID`, else the default) and uploads the tar
+  **and** the `.asc` to the `gitd-container` release and `s3://<bucket>/image/`.
 - The **bundle** pin is checked in the stack's UserData bootstrap:
   `echo "<BundleSha256>  bundle.tar.gz | sha256sum -c -` aborts boot on
   mismatch.
-- Inside `userdata.sh`, `verify_sha256 <expected> <file>` does a strict
-  64-hex fixed-length compare for the image, containerd, and runc tarballs and
-  `die`s ("sha256 mismatch ... aborting boot") on any failure. Malformed
-  expected hashes are rejected too (a truncated pin can never match).
-- The image is fetched from GitHub Releases (primary, `gitd-container` tag),
-  falling back to S3 `image/`, then to the bundle copy; whichever source, the
-  pinned `IMAGE_SHA256` must match before `ctr images import`.
+- Inside `userdata.sh`, after fetching the image (GitHub primary / S3 fallback /
+  bundle copy) **and** its `.asc` from the **same** source, it first verifies
+  the GPG signature against the bundle's pinned public key
+  (`gitd-signing-key.asc`, committed in-repo at `tools/release/` and packaged
+  into the bundle by `deploy.sh`), then `verify_sha256 <expected> <file>` does a
+  strict 64-hex fixed-length compare, then imports. Any failure — missing
+  `.asc`, bad signature, malformed hash, hash mismatch — `die`s
+  ("signature verification FAILED ... aborting boot") on the spot. **Signature
+  verification is REQUIRED**: a missing `.asc` aborts boot, never falls through.
+- The signing **private key never enters the repo or the bundle** — it stays on
+  the operator's client box. The committed `gitd-signing-key.asc` is public
+  (export-only) material; verification pins against it.
 
-There is **no** signature step (no openssl pkeyutl) — the pinned hash is the
-trust anchor.
+The out-of-band sha256 pin is unchanged: the hash is still supplied by the
+operator (CFN parameters for deploy, `--sha256` for update) and never fetched
+from the artifact channel.
 
 ## 4. Boot and rollback diagnostics
 
@@ -168,6 +184,11 @@ underlying cause locally, and re-run `deploy.sh`.
 
 Watch for the most common boot failures:
 
+- GPG signature verification FAILED / `.asc` missing → the image was not
+  signed by the key matching the bundle's pinned `gitd-signing-key.asc` (or the
+  `.asc` was not published next to the tar). Rebuild + re-sign with the
+  operator's key, republish tar **and** `.asc`, re-run deploy so the bundle
+  carries a consistent public key.
 - sha256 mismatch / empty image tarball → artifact keyed to the wrong build;
   rebuild + republish, re-run deploy so the pins update.
 - `ctr images import failed` or

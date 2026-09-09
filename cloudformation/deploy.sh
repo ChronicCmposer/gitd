@@ -99,6 +99,13 @@ require_cmd sha256sum
 require_cmd tar
 [[ -n "${GH_TOKEN:-}" ]] || die "GH_TOKEN must be set to publish gitd-container.tar"
 
+# Shared GPG signing helpers (sign_artifact / verify_artifact) + the committed
+# pinned public key the bundle carries so the instance can verify provenance.
+# shellcheck source=tools/release/sign-artifact.sh
+source "${SCRIPT_DIR}/../tools/release/sign-artifact.sh"
+SIGNING_KEY="${SCRIPT_DIR}/../tools/release/gitd-signing-key.asc"
+[[ -f "${SIGNING_KEY}" ]] || die "pinned GPG signing key not found: ${SIGNING_KEY}"
+
 # --- artifact inputs must exist ---------------------------------------------------
 [[ -f "${IMAGE_TAR}" ]] || die "image tarball not found: ${IMAGE_TAR} (run 'make image-container')"
 # Host binaries come from the dist pipeline (already determinism-checked).
@@ -121,6 +128,11 @@ RUNC_SHA256="$(sha256sum "${RUNC_FILE}" | cut -d' ' -f1)"
 require_cmd git
 REPO_REF_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 
+# GPG-sign the image BEFORE publishing/packaging: the host verifies the .asc
+# (provenance) before the pinned sha256. sign_artifact fails loudly on any
+# problem, so an unsigned image can never be deployed.
+sign_artifact "${IMAGE_TAR}"
+
 # --- build the deployment bundle (R13-Q4: configs written verbatim at boot) ---------
 STAGE="$(mktemp -d "${BUNDLE_DIR}/bundle.XXXXXX")"
 trap 'rm -rf "${STAGE}"' EXIT
@@ -134,8 +146,14 @@ cp "${REPO_ROOT}/tools/dist/containerd/containerd.service"  "${STAGE}/containerd
 cp "${REPO_ROOT}/tools/dist/containerd/config.toml"         "${STAGE}/config.toml"
 cp "${REPO_ROOT}/pki/gitd-cert-sync.sh"                     "${STAGE}/gitd-cert-sync.sh"
 # The image tarball rides in the bundle as a local fallback (7.3), though
-# userdata fetches it from GitHub primary / S3 fallback (7.2, R3-Q2).
+# userdata fetches it from GitHub primary / S3 fallback (7.2, R3-Q2). The
+# detached .asc + pinned public key + shared verify helper ride along so the
+# fallback path can still prove provenance (fail-fast, never trust unsigned).
 cp "${IMAGE_TAR}"                                           "${STAGE}/gitd-container.tar"
+[[ -f "${IMAGE_TAR}.asc" ]] || die "signed image .asc missing: ${IMAGE_TAR}.asc (sign_artifact should have produced it)"
+cp "${IMAGE_TAR}.asc"                                       "${STAGE}/gitd-container.tar.asc"
+cp "${SIGNING_KEY}"                                         "${STAGE}/gitd-signing-key.asc"
+cp "${SCRIPT_DIR}/../tools/release/sign-artifact.sh"        "${STAGE}/sign-artifact.sh"
 
 BUNDLE_TAR="${BUNDLE_DIR}/gitd-bundle.tar.gz"
 mkdir -p "${BUNDLE_DIR}"
@@ -152,14 +170,15 @@ echo "gitd: deploy: bundle uploaded to s3://${BUCKET}/${BUNDLE_S3_KEY}"
 
 # --- publish gitd-container.tar to the gitd-dist release + S3 image fallback ---------
 if gh release view "${GITD_RELEASE_TAG}" --repo "${DIST_REPO}" >/dev/null 2>&1; then
-    gh release upload "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" --repo "${DIST_REPO}" --clobber
+    gh release upload "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" "${IMAGE_TAR}.asc" --repo "${DIST_REPO}" --clobber
 else
-    gh release create "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" --repo "${DIST_REPO}" \
+    gh release create "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" "${IMAGE_TAR}.asc" --repo "${DIST_REPO}" \
         --title "gitd OCI image" \
-        --notes "gitd-container.tar (R3-Q2). sha256: ${IMAGE_SHA256}"
+        --notes "gitd-container.tar (R3-Q2). sha256: ${IMAGE_SHA256}. GPG-signed (gitd-signing-key.asc)."
 fi
 aws s3 cp "${IMAGE_TAR}" "s3://${BUCKET}/image/gitd-container.tar" --region "${REGION}" --only-show-errors
-echo "gitd: deploy: image published to ${DIST_REPO}@${GITD_RELEASE_TAG} + s3://${BUCKET}/image/"
+aws s3 cp "${IMAGE_TAR}.asc" "s3://${BUCKET}/image/gitd-container.tar.asc" --region "${REGION}" --only-show-errors
+echo "gitd: deploy: image published to ${DIST_REPO}@${GITD_RELEASE_TAG} + s3://${BUCKET}/image/ (tar + .asc)"
 
 # --- push client-side certs to SSM BEFORE create-stack (R3-Q3) ------------------------
 "${SCRIPT_DIR}/upload-certs.sh"

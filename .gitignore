@@ -31,3 +31,15 @@ gitd-mutation-reports/
 # for the bump-version clean-tree guard (R1-Q11), so ignore them here rather than
 # relying on a local .git/info/exclude on the dev box.
 bazel-*
+
+# --- GPG artifact signing: never commit private key material --------------------
+# tools/release/gitd-signing-key.asc (the PUBLIC key) is committed; the signing
+# PRIVATE key lives only on the operator's client box. Any private key material
+# (secret keys, secrings, revocation certs) that lands in the tree must never be
+# staged — ignore it here so an accidental export cannot be committed.
+tools/release/*.gpg
+tools/release/*.sec
+tools/release/*.secring*
+tools/release/private*
+tools/release/*.rev
+tools/release/openpgp-revocs.d/

@@ -11,9 +11,11 @@ to push a routine upgrade to a live server.
 > faithful narrative of its flow. Run it from the client box as
 > `make update ARGS="--sha256 <hex>"` (or
 > `GITD_IMAGE_SHA256=<hex> cloudformation/update.sh`). It builds/reuses
-> `gitd-container.tar`, verifies it against your out-of-band pin, publishes it
-> (GitHub primary + S3 fallback), then drives the host over SSM to fetch,
-> re-verify the same pin, `ctr images import`, and restart the three units.
+> `gitd-container.tar`, verifies it against your out-of-band pin, **GPG-signs
+> it**, publishes tar + `.asc` (GitHub primary + S3 fallback), then drives the
+> host over SSM to fetch both, **verify the GPG signature against the pinned
+> public key**, re-verify the same sha256 pin, `ctr images import`, and restart
+> the three units.
 
 ## 1. What an update moves
 
@@ -35,11 +37,15 @@ to push a routine upgrade to a live server.
    `tools/dist/README.md`). For a normal versioned release use the coordinated
    path instead: `make bump-version LEVEL=<major|minor|patch>` then
    `make release`, which builds the stamped `gitd` binary from the exact tag,
-   produces the same `gitd-container.tar`, and prints the sha256. Note the
-   resulting sha256.
+   produces the same `gitd-container.tar`, **GPG-signs it**
+   (`gitd-container.tar.asc`), and prints the sha256. Note the resulting
+   sha256.
 2. **Upload the artifacts** to the artifact channel — GitHub Releases (primary,
    `gitd-container` tag) and/or `s3://git.cmposer.cc/image/` — so the host can
-   fetch them.
+   fetch them. The image's detached `.asc` is uploaded **alongside** (the
+   update script signs and uploads both). `update.sh` verifies the local
+   tarball against the pinned sha256 **and** signs it before publishing;
+   `publish-dist.sh` does the same for every product tarball.
 3. **Publish the sha256 pin** *locally/out-of-band* (R6-Q3). This is the
    critical security property: the expected sha256 is passed to the update as
    an **argument or environment value on the host**, typed in by the operator
@@ -47,18 +53,26 @@ to push a routine upgrade to a live server.
    fetched from the artifact channel** — the integrity claim rests on you
    providing a trusted hash out of band, exactly like `deploy.sh`'s pins but
    local to the update instead of baked into CFN parameters (R3-Q2).
-4. **Fetch the new `gitd-container.tar`** to the host (SSM host-plane shell,
-   `docs/admin-split.md`) and verify the fetched file against the pinned hash:
+4. **Fetch the new `gitd-container.tar` to the host** (SSM host-plane shell,
+   `docs/admin-split.md`) and verify it **twice**: first the GPG provenance,
+   then the pinned hash:
    ```sh
    # host plane
    expected="<paste the sha256 printed by make image-container>"   # out-of-band
    curl -fsSL -o /opt/gitd-container.tar \
      https://github.com/ChronicCmposer/gitd-dist/releases/download/gitd-container/gitd-container.tar
+   curl -fsSL -o /opt/gitd-container.tar.asc \
+     https://github.com/ChronicCmposer/gitd-dist/releases/download/gitd-container/gitd-container.tar.asc
+   # pinned public key (committed at tools/release/gitd-signing-key.asc)
+   gpg --homedir "$(mktemp -d)" --import /opt/gitd-signing-key.asc
+   gpg --verify /opt/gitd-container.tar.asc /opt/gitd-container.tar   # must print "Good signature"
    echo "$expected  /opt/gitd-container.tar" | sha256sum -c -   # must print: OK
    ```
-   Any mismatch aborts here — never import an unverified image. (Fall back to
-   `s3://git.cmposer.cc/image/gitd-container.tar` the same way if GitHub is
-   down.)
+   **GPG verification is REQUIRED** (provenance on top of the pinned sha256):
+   a missing `.asc`, a bad signature, or a hash mismatch all abort here — never
+   import an unverified image. (Fall back to
+   `s3://git.cmposer.cc/image/gitd-container.tar` + `.asc` the same way if
+   GitHub is down.)
 5. **Import + swap.** With the verified image:
    ```sh
    ctr -n default images import /opt/gitd-container.tar
@@ -106,8 +120,11 @@ S3 which is heavier and unnecessary when the durable EBS store is fine.
 
 ## 5. Partial-update hazards to avoid
 
-- **Never import an unverified image.** The pin is the trust boundary (R6-Q3).
-  If your out-of-band hash doesn't `sha256sum -c` cleanly, stop.
+- **Never import an unverified image.** The trust boundary is the **out-of-band
+  sha256 pin** (R6-Q3) *plus* the **GPG signature** (provenance): if the `.asc`
+  is missing, the signature is bad, or your out-of-band hash doesn't
+  `sha256sum -c` cleanly, stop. `update.sh`'s host-side step enforces this
+  order — GPG first, then the hash — and aborts on either failure.
 - **Don't skip the determinism gate** on the build side — a non-reproducible
   image is a supply-chain smell (R3-Q2).
 - **The same image is shared by all three units**, so a bad image breaks all of

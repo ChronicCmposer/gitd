@@ -65,6 +65,7 @@ internal/
 cloudformation/          stack.yaml, userdata.sh, deploy.sh, upload-certs.sh, ddns-setup.md
 configs/                 gitd.yaml + webhooks.yaml examples (R13-Q4, shipped verbatim at boot)
 tools/dist/              deterministic dist pipeline (openssh/git/fish/sudo/ca-certs/containerd/runc/Go)
+tools/release/           release orchestration: bump-version.sh, release.sh, workspace-status.sh, sign-artifact.sh, gitd-signing-key.asc
 tools/ssh-ca/            SSH CA tooling + client setup
 pki/                     TLS mTLS PKI tooling + renewal timers
 image/                   from-scratch OCI image assembly
@@ -114,10 +115,43 @@ make release                          # build the stamped binary + gitd-containe
 
 `make release` **requires `HEAD` to be exactly a release tag** (`git describe
 --tags --exact-match` must succeed) so the binary embeds the exact tag — run
-`make bump-version` first. It builds the stamped binary and image, prints the
-sha256 you use as the **out-of-band update pin** for `make update` (R6-Q3), and
-optionally publishes `gitd-container.tar` to the `gitd-dist` release when
-`GH_TOKEN` is set (a skipped/failed publish never fails the build).
+`make bump-version` first. It builds the stamped binary and image, **GPG-signs
+`gitd-container.tar`** (`gitd-container.tar.asc`, operator key via
+`GPG_KEY_ID`), prints the sha256 you use as the **out-of-band update pin** for
+`make update` (R6-Q3), and optionally publishes the tar **and** `.asc` to the
+`gitd-dist` release when `GH_TOKEN` is set (a skipped/failed publish never
+fails the build).
+
+### Artifact signing (GPG)
+
+Every published artifact — the `gitd-container.tar` image **and** each dist
+product tarball — carries a detached ASCII-armored GPG signature (`.asc`)
+uploaded alongside it to the same GitHub release + S3 mirror. The consumers
+verify provenance **before** trusting the pinned sha256:
+
+- **Sign (build side):** `release.sh`, `deploy.sh`, `update.sh`, and
+  `publish-dist.sh` call `sign_artifact` (shared helper
+  `tools/release/sign-artifact.sh`), which uses the operator's key — `GPG_KEY_ID`
+  if set, else gpg's default key. Signing fails loudly, so an unsigned artifact
+  is never published.
+- **Verify (consumer side):** `userdata.sh` at boot and `update.sh`'s host
+  step verify the `.asc` against the **committed public key**
+  (`tools/release/gitd-signing-key.asc`) in a throwaway GPG home, then check the
+  pinned sha256. A missing `.asc` or a bad signature aborts (fail-fast) — the
+  out-of-band sha256 pin remains the primary trust anchor, GPG adds provenance
+  (supersedes the plan's R3-Q2 "no signature" note).
+- **Key custody:** the **private** signing key lives only on the operator's
+  client box (never in the repo — `.gitignore` guards `*.gpg`/`secring`/etc.
+  under `tools/release/`). The committed `gitd-signing-key.asc` is public
+  export-only material. To use your own key, export its public half over the
+  committed file and keep its private half in your keyring, then sign with
+  `GPG_KEY_ID=<fingerprint>`.
+
+```sh
+# verify an artifact's provenance manually (throwaway keyring, pinned key)
+gpg --homedir "$(mktemp -d)" --import tools/release/gitd-signing-key.asc
+gpg --verify <artifact>.asc <artifact>     # must print "Good signature"
+```
 
 ### Running the CLI locally
 
@@ -144,13 +178,13 @@ Exit codes: `0` ok, `1` runtime, `2` usage; errors to stderr as
 
 | Runbook | Covers |
 |---------|--------|
-| [deploy](docs/deploy.md) | prerequisites, `deploy.sh`, artifact sha256 pin flow, boot/rollback, SSM access, post-boot verification |
+| [deploy](docs/deploy.md) | prerequisites, `deploy.sh`, artifact sha256 pin + GPG provenance flow, boot/rollback, SSM access, post-boot verification |
 | [restore-from-s3](docs/restore-from-s3.md) | `gitd mirror fetch <repo> <dest>` restore, weekly bundle verify, repo deletion |
 | [cert-renewal](docs/cert-renewal.md) | TLS + SSH renewal (client timer → SSM → cert-sync; host-cert via update.sh) |
 | [plugin-authoring](docs/plugin-authoring.md) | webhook `Plugin` interface, registry, http/logger, HMAC, config schema, delivery semantics |
-| [openssh-upgrade](docs/openssh-upgrade.md) | bump pin, auth-identity patch, rebuild, determinism, republish, in-place update |
+| [openssh-upgrade](docs/openssh-upgrade.md) | bump pin, auth-identity patch, rebuild, determinism, republish (GPG-signed), in-place update |
 | [admin-split](docs/admin-split.md) | container-shell data plane vs SSM host plane, `gitd` verb reference |
-| [update](docs/update.md) | in-place `update.sh` flow (out-of-band sha256 pin, ctr import, restart) |
+| [update](docs/update.md) | in-place `update.sh` flow (GPG verify + out-of-band sha256 pin, ctr import, restart) |
 | [ca-loss-recovery](docs/ca-loss-recovery.md) | new CA + reissue + SSM + `@cert-authority` cutover |
 | [quantum-threat-model](docs/quantum-threat-model.md) | hybrid-PQC kex vs classical signatures, revisit triggers |
 | [verification](docs/verification.md) | end-to-end probes (ssh greeting + mTLS curl only) |

@@ -20,6 +20,8 @@ DIST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${DIST_DIR}/versions.sh"
 # shellcheck source=tools/dist/lib.sh
 source "${DIST_DIR}/lib.sh"
+# shellcheck source=tools/release/sign-artifact.sh
+source "${DIST_DIR}/../release/sign-artifact.sh"
 
 PRODUCT="publish-dist"
 
@@ -43,21 +45,29 @@ asset="$(product_asset_name "${asset_name}" "${version}")"
 src="${DIST_DIR}/out/${asset}"
 [[ -f "${src}" ]] || die "artifact not found: ${src} (run make check-${product}-dist first)"
 
-# GitHub tag + asset upload.
+# GPG-sign the artifact BEFORE publishing: the consumer (Bazel fetch / boot /
+# update) expects a detached .asc next to every product tarball (provenance on
+# top of the pinned sha256). A sign failure blocks publish — no unsigned dist
+# product is ever uploaded.
+sign_artifact "${src}"
+
+# GitHub tag + asset upload (tar + .asc together).
 require_cmd gh
 [[ -n "${GH_TOKEN:-}" ]] || die "GH_TOKEN must be set to publish a GitHub release"
 tag="${product}-${version}"
 if gh release view "${tag}" --repo "${DIST_REPO}" >/dev/null 2>&1; then
-    gh release upload "${tag}" "${src}" --repo "${DIST_REPO}" --clobber
+    gh release upload "${tag}" "${src}" "${src}.asc" --repo "${DIST_REPO}" --clobber
 else
-    gh release create "${tag}" "${src}" --repo "${DIST_REPO}" \
+    gh release create "${tag}" "${src}" "${src}.asc" --repo "${DIST_REPO}" \
         --title "${product} ${version}" \
-        --notes "Deterministic build artifact (gitd dist pipeline). sha256: $(sha256_of "${src}")"
+        --notes "Deterministic build artifact (gitd dist pipeline). sha256: $(sha256_of "${src}"). GPG-signed (gitd-signing-key.asc)."
 fi
 echo "gitd: publish-dist: ${product}: GitHub release ${tag}"
 
-# S3 fallback mirror.
+# S3 fallback mirror (tar + .asc together).
 require_cmd aws
 aws s3 cp "${src}" "s3://${S3_BUCKET}/${prefix}/${asset}" \
+    --region "${S3_REGION}" --only-show-errors
+aws s3 cp "${src}.asc" "s3://${S3_BUCKET}/${prefix}/${asset}.asc" \
     --region "${S3_REGION}" --only-show-errors
 echo "gitd: publish-dist: ${product}: s3://${S3_BUCKET}/${prefix}/${asset}"

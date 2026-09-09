@@ -98,9 +98,13 @@ make publish-openssh-dist   # tools/dist/publish-dist.sh openssh
 
 This uploads the determinism-checked artifact to the GitHub mirror tag
 (`openssh-<version>` on `ChronicCmposer/gitd-dist`, primary, R3-Q2) and to
-`s3://git.cmposer.cc/openssh/` (fallback). Requires `GH_TOKEN` + `aws` CLI.
-Publishing is gated on having a checked artifact; an unpublished or
-mis-pinned artifact would fail the Bazel fetch later.
+`s3://git.cmposer.cc/openssh/` (fallback). Before uploading, the artifact is
+**GPG-signed** (detached ASCII-armored `.asc`, operator key via `GPG_KEY_ID`)
+and the `.asc` is uploaded alongside on both channels — consumers (boot,
+update, and the Bazel fetch review flow) verify provenance against the
+committed public key `tools/release/gitd-signing-key.asc`. Requires `GH_TOKEN`
++ `aws` CLI. Publishing is gated on having a checked artifact; an unpublished
+or mis-pinned artifact would fail the Bazel fetch later.
 
 ## 7. Rebuild the image and update the sha256 pin
 
@@ -120,17 +124,21 @@ sha256 is what the server pins. The image tarball is published to the
 
 - `deploy.sh`/`update.sh` compute `IMAGE_SHA256` from the tarball and pass it
   as the CloudFormation `ImageSha256` parameter (deploy) or as the update
-  sha256 pin (update).
-- `userdata.sh` verifies the pinned hash against the fetched image and aborts
-  boot on any mismatch (`verify_sha256`), so a corrupted or tampered image can
-  never silently land.
+  sha256 pin (update). Both sign the image (`gitd-container.tar.asc`) before
+  publishing and upload the `.asc` alongside.
+- `userdata.sh` fetches the image **and its `.asc`**, verifies the GPG
+  signature against the bundle's pinned public key first, then verifies the
+  pinned hash (`verify_sha256`), and aborts boot on any failure — so a
+  corrupted, tampered, or unauthenticated image can never silently land.
+  `update.sh`'s host-side step applies the same GPG + sha256 checks.
 
 ## 8. Update in place
 
 Do **not** tear down and re-create the instance for an upgrade. Use the
 in-place `update.sh` flow (R3-Q10/R6-Q3, `docs/update.md`): fetch the new
-`gitd-container.tar`, verify the pinned sha256 (passed locally out-of-band,
-never fetched from the artifact channel), `ctr images import`, restart the
+`gitd-container.tar` **and its `.asc`**, verify the GPG signature against the
+pinned public key, then the pinned sha256 (passed locally out-of-band, never
+fetched from the artifact channel), `ctr images import`, restart the
 container units. EBS `/srv/git` and the spool are preserved; there is no bundle
 restore. The host keys stay the same across the whole sshd upgrade (the host
 key/cert are on the host and overlaid into the container, not baked into the
