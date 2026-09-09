@@ -1,0 +1,175 @@
+# //image — from-scratch OCI image assembly (2.5, R2-Q15).
+#
+# rules_oci oci_image built from:
+#   - the in-repo filesystem files under fs/ (passwd, group, sshd_config,
+#     system gitconfig, sudoers, ...);
+#   - the pinned dist tarballs (@openssh_dist, @git_dist, @fish_dist,
+#     @sudo_dist, @ca_certs_dist) layered at their natural paths;
+#   - the gitd binary + the static hook shims + nologin built from Go.
+#
+# tags = ["manual"]: the image needs the published dist tarballs (dist.bzl
+# fails fast on unpinned products), so the default `bazel build //...` skips
+# this package. Build it explicitly after publishing artifacts:
+#   make check-*-dist && make gen-dist-pins && bazel build //image:image
+
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+
+package(default_visibility = ["//visibility:public"])
+
+# --- In-image filesystem files ---------------------------------------------------
+
+# World-readable config files (passwd, group, sshd_config, gitconfig, ...),
+# all root:root 0644 (R6-Q5).
+pkg_tar(
+    name = "etc_fs_tar",
+    srcs = glob(
+        ["fs/etc/**"],
+        exclude = ["fs/etc/sudoers"],
+    ),
+    mode = "0644",
+    owner = "0.0",
+    package_dir = "/",
+    strip_prefix = "fs",
+)
+
+# sudoers must be 0440 (sudo refuses world-writable sudoers) (R8-Q1).
+pkg_tar(
+    name = "sudoers_tar",
+    srcs = ["fs/etc/sudoers"],
+    mode = "0440",
+    owner = "0.0",
+    package_dir = "/",
+    strip_prefix = "fs",
+)
+
+# --- Dist product layers ----------------------------------------------------------
+# Each layer unpacks the checksummed dist tarball (usr/... or etc/... at the
+# top level) into the image at its natural path. The genrule keeps the layer
+# byte-deterministic regardless of Bazel's external-repo exec paths.
+
+genrule(
+    name = "openssh_layer",
+    tags = ["manual"],
+    srcs = ["@openssh_dist//:artifact.tar.gz"],
+    outs = ["openssh_layer.tar"],
+    cmd = "mkdir -p layer && tar -xzf \"$(location @openssh_dist//:artifact.tar.gz)\" -C layer && tar -cf \"$@\" --sort=name --owner=0 --group=0 --numeric-owner -C layer .",
+)
+
+genrule(
+    name = "git_layer",
+    tags = ["manual"],
+    srcs = ["@git_dist//:artifact.tar.gz"],
+    outs = ["git_layer.tar"],
+    cmd = "mkdir -p layer && tar -xzf \"$(location @git_dist//:artifact.tar.gz)\" -C layer && tar -cf \"$@\" --sort=name --owner=0 --group=0 --numeric-owner -C layer .",
+)
+
+genrule(
+    name = "fish_layer",
+    tags = ["manual"],
+    srcs = ["@fish_dist//:artifact.tar.gz"],
+    outs = ["fish_layer.tar"],
+    cmd = "mkdir -p layer && tar -xzf \"$(location @fish_dist//:artifact.tar.gz)\" -C layer && tar -cf \"$@\" --sort=name --owner=0 --group=0 --numeric-owner -C layer .",
+)
+
+genrule(
+    name = "sudo_layer",
+    tags = ["manual"],
+    srcs = ["@sudo_dist//:artifact.tar.gz"],
+    outs = ["sudo_layer.tar"],
+    cmd = "mkdir -p layer && tar -xzf \"$(location @sudo_dist//:artifact.tar.gz)\" -C layer && tar -cf \"$@\" --sort=name --owner=0 --group=0 --numeric-owner -C layer .",
+)
+
+genrule(
+    name = "ca_certs_layer",
+    tags = ["manual"],
+    srcs = ["@ca_certs_dist//:artifact.tar.gz"],
+    outs = ["ca_certs_layer.tar"],
+    cmd = "mkdir -p layer && tar -xzf \"$(location @ca_certs_dist//:artifact.tar.gz)\" -C layer && tar -cf \"$@\" --sort=name --owner=0 --group=0 --numeric-owner -C layer .",
+)
+
+# --- gitd + hook shims + nologin (static Go binaries) ----------------------------
+
+# pkg_files maps each static binary to its image path (0755 root:root);
+# pkg_tar layers them. renames keys are the source labels.
+pkg_files(
+    name = "bin_files",
+    srcs = [
+        "//cmd/gitd:gitd_static",
+        "//cmd/hookshim:pre-receive",
+        "//cmd/hookshim:post-receive",
+        "//cmd/nologin:nologin",
+    ],
+    attributes = pkg_attributes(mode = "0755", uid = 0, gid = 0),
+    renames = {
+        "//cmd/gitd:gitd_static": "usr/local/bin/gitd",
+        "//cmd/hookshim:pre-receive": "usr/local/lib/gitd/hooks/pre-receive",
+        "//cmd/hookshim:post-receive": "usr/local/lib/gitd/hooks/post-receive",
+        "//cmd/nologin:nologin": "usr/local/bin/nologin",
+    },
+)
+
+pkg_tar(
+    name = "bin_tar",
+    srcs = [":bin_files"],
+    owner = "0.0",
+)
+
+# Mount points + privsep dirs that must exist in the rootfs (--rootfs-ro):
+# /var/empty (sshd privsep), /run/sshd (pid dir), /home/admin (rw bind mount
+# target), /srv/git + /var/spool/gitd (rw bind mount targets), /etc/gitd (ro
+# bind mount target), /etc/ssh/auth_principals (per-user CA principals).
+pkg_tar(
+    name = "dirs_tar",
+    empty_dirs = [
+        "var/empty",
+        "run/sshd",
+        "home/admin",
+        "srv/git",
+        "var/spool/gitd",
+        "etc/gitd",
+        "etc/ssh/auth_principals",
+    ],
+    mode = "0755",
+    owner = "0.0",
+    package_dir = "/",
+)
+
+# --- The image ---------------------------------------------------------------------
+
+oci_image(
+    name = "image",
+    tags = ["manual"],
+    base = None,
+    os = "linux",
+    architecture = select({
+        "@platforms//cpu:arm64": "arm64",
+        "@platforms//cpu:x86_64": "amd64",
+    }),
+    tars = [
+        ":etc_fs_tar",
+        ":sudoers_tar",
+        ":dirs_tar",
+        ":ca_certs_layer",
+        ":openssh_layer",
+        ":git_layer",
+        ":fish_layer",
+        ":sudo_layer",
+        ":bin_tar",
+    ],
+    # Host keys, TrustedUserCAKeys, revoked_keys are provisioned at deploy
+    # time (R3-Q3) and overlaid onto /etc/ssh; empty placeholders keep the
+    # baked sshd_config's references resolvable inside the image.
+    # No entrypoint: the systemd ctr units (Phase 7) pass the command.
+)
+
+# Docker-save-format tarball for `docker load` (rules_oci oci_load). The
+# gitd-container.tar used by `ctr images import` (R3-Q2, Phase 7) is packaged
+# deterministically from the OCI layout by tools/dist/package-image.sh.
+oci_load(
+    name = "container",
+    tags = ["manual"],
+    image = ":image",
+    repo_tags = ["git.cmposer.cc/gitd:latest"],
+)

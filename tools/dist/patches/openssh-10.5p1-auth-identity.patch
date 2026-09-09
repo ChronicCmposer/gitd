@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: gitd <gitd@git.cmposer.cc>
+Date: Tue, 08 Sep 2026 00:00:00 +0000
+Subject: [PATCH] session: export SSH_AUTH_KEY_FP/TYPE/CERT_ID to forced commands
+
+gitd needs the authenticated key identity in every git session (R2-Q6
+Option A). do_setup_env already exports SSH_ORIGINAL_COMMAND and
+SSH_CONNECTION; this exports the last-used auth key's fingerprint, key
+type, and certificate key-id as SSH_AUTH_KEY_FP, SSH_AUTH_KEY_TYPE, and
+SSH_AUTH_CERT_ID (empty for plain keys). The variables exist only in the
+forced-command child environment, never on the wire, so PermitUserEnvironment
+is irrelevant to them. gitd fails closed when these are missing (R10-Q5).
+
+---
+ session.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/session.c b/session.c
+index 000000000000..000000000000 100644
+--- a/session.c
++++ b/session.c
+@@ -1142,6 +1142,34 @@ do_setup_env(struct ssh *ssh, Session *s, const char *shell)
+ 		child_set_env(&env, &envsize, "SSH_ORIGINAL_COMMAND",
+ 		    original_command);
+ 
++	/*
++	 * gitd identity (R2-Q6 Option A): export the authenticated public
++	 * key to forced commands. SSH_AUTH_KEY_FP is the key fingerprint,
++	 * SSH_AUTH_KEY_TYPE the key type, and SSH_AUTH_CERT_ID the cert
++	 * key-id when the user authenticated with a certificate (empty
++	 * otherwise). The server never sends these to the client; they
++	 * exist only in the child environment of the forced command, so
++	 * PermitUserEnvironment has no bearing on them.
++	 */
++	if (s->authctxt->auth_method_key != NULL) {
++		char *key_fp;
++
++		key_fp = sshkey_fingerprint(s->authctxt->auth_method_key,
++		    options.fingerprint_hash, SSH_FP_HEX);
++		if (key_fp == NULL)
++			fatal("sshkey_fingerprint: %s", ssh_err(SSH_ERR_ALLOC_FAIL));
++		child_set_env(&env, &envsize, "SSH_AUTH_KEY_FP", key_fp);
++		free(key_fp);
++		child_set_env(&env, &envsize, "SSH_AUTH_KEY_TYPE",
++		    sshkey_type(s->authctxt->auth_method_key));
++		if (sshkey_is_cert(s->authctxt->auth_method_key) != 0 &&
++		    s->authctxt->auth_method_key->cert->key_id != NULL)
++			child_set_env(&env, &envsize, "SSH_AUTH_CERT_ID",
++			    s->authctxt->auth_method_key->cert->key_id);
++		else
++			child_set_env(&env, &envsize, "SSH_AUTH_CERT_ID", "");
++	}
++
+ 	if (debug_flag) {
+ 		/* dump the environment */
+ 		fprintf(stderr, "Environment:\n");
+-- 
+2.53.0

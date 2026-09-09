@@ -1,0 +1,31 @@
+# containerd configuration for gitd (R2-Q19).
+# Installed by userdata at /etc/containerd/config.toml; consumed by
+# /usr/local/bin/containerd via the containerd.service unit.
+#
+# Version 2 config schema (containerd 2.x). The CRI plugin is disabled: gitd
+# drives containerd directly with `ctr run` (R2-Q15), so no Kubernetes
+# surface exists.
+
+version = 2
+
+root = "/var/lib/containerd"
+state = "/run/containerd"
+
+# Default runtime is runc-v2 (the static runc built by the dist pipeline).
+[plugins."io.containerd.grpc.v1.cri"]
+  disabled = true
+
+[plugins."io.containerd.runtime.v1.linux"]
+  shim_debug = false
+
+[plugins."io.containerd.runtime.v2.task"]
+  platforms = ["linux/arm64", "linux/amd64"]
+
+[plugins."io.containerd.snapshotter.v1.overlayfs"]
+  root_path = "/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs"
+
+[metrics]
+  address = "127.0.0.1:1338"
+
+[debug]
+  level = "info"

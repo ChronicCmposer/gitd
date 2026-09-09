@@ -1,0 +1,29 @@
+# Hook shim binaries (R7-Q10, R11-Q7).
+#
+# One main, two go_binary targets: the binary name determines the gitd verb
+# (hooks/pre-receive -> gitd pre-receive, hooks/post-receive -> gitd notify).
+# Both are static, pure Go — the from-scratch image has no dynamic loader.
+# Gazelle would collapse these into one target; they are hand-written by
+# design (two binaries from one package).
+#
+# gazelle:ignore
+
+load("@io_bazel_rules_go//go:def.bzl", "go_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+go_binary(
+    name = "pre-receive",
+    srcs = ["main.go"],
+    deps = ["//internal/hookshim"],
+    pure = "on",
+    static = "on",
+)
+
+go_binary(
+    name = "post-receive",
+    srcs = ["main.go"],
+    deps = ["//internal/hookshim"],
+    pure = "on",
+    static = "on",
+)

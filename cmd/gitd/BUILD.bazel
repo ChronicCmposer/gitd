@@ -13,3 +13,14 @@ go_binary(
     embed = [":gitd_lib"],
     visibility = ["//visibility:public"],
 )
+
+# Static variant for the from-scratch image (//image:image): the image has no
+# dynamic loader, so the gateway binary must be fully static. Built separately
+# from the dev binary so the two can use different link modes.
+go_binary(
+    name = "gitd_static",
+    embed = [":gitd_lib"],
+    pure = "on",
+    static = "on",
+    visibility = ["//visibility:public"],
+)

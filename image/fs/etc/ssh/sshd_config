@@ -1,0 +1,62 @@
+# gitd hardened sshd_config (baked into the from-scratch image).
+#
+# Sources: R2-Q3 (hardening batch), R7-Q9 (sftp/AuthenticationMethods),
+# R4-Q6 (PerSourcePenalties), R13-Q3 (Ed25519 host key only), R2-Q14
+# (CA principals), R10-Q1 (ForceCommand scoped to the git user only).
+#
+# Runtime overrides: sshd_config, the host key, TrustedUserCAKeys,
+# revoked_keys, and auth_principals/ live under /etc/gitd on the host and are
+# overlaid by the sshd systemd unit (Phase 7); the baked copies are the
+# defaults.
+
+# Network + session hardening (R2-Q3)
+Port 22
+ListenAddress 0.0.0.0
+Protocol 2
+UsePAM no
+PermitRootLogin no
+PermitUserEnvironment no
+PermitEmptyPasswords no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+AllowAgentForwarding no
+AllowTcpForwarding no
+AllowStreamLocalForwarding no
+PermitTunnel no
+GatewayPorts no
+X11Forwarding no
+
+# Brute-force + resource limits (R2-Q3, R4-Q6)
+MaxAuthTries 3
+LoginGraceTime 30
+ClientAliveInterval 300
+ClientAliveCountMax 3
+MaxSessions 2
+PerSourcePenalties yes
+
+# Logging
+LogLevel VERBOSE
+
+# Host key: Ed25519 only (R13-Q3). No RSA/ECDSA/DSA host keys in the image.
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# CA-based authentication (R2-Q4, R2-Q14)
+TrustedUserCAKeys /etc/ssh/trusted_user_ca_keys.pem
+AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
+RevokedKeys /etc/ssh/revoked_keys
+AuthorizedKeysFile none
+
+# No sftp-server binary exists in the from-scratch image (R7-Q9).
+Subsystem sftp none
+
+# Only the git and admin users may log in (R2-Q14).
+AllowUsers git admin
+
+# Gateway for the git user only (R10-Q1): every git session lands in gitd's
+# gateway (sshcmd), which serves git-upload-pack/git-receive-pack and the
+# greeting. The admin user's fish shell is untouched.
+Match User git
+    ForceCommand /usr/local/bin/gitd serve
+    PermitTTY no

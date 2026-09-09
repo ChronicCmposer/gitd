@@ -1,0 +1,12 @@
+# hookshim shared implementation for the git hook shims (R7-Q10).
+
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+package(default_visibility = ["//visibility:public"])
+
+go_library(
+    name = "hookshim",
+    srcs = ["hookshim.go"],
+    importpath = "github.com/ChronicCmposer/gitd/internal/hookshim",
+    visibility = ["//visibility:public"],
+)

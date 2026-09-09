@@ -1,0 +1,29 @@
+[Unit]
+Description=containerd container runtime
+Documentation=https://containerd.io
+# R2-Q19: containerd runs as a HOST binary on AL2023; the gitd containers are
+# launched with ctr (no CRI, no kubelet). Start after the filesystems and
+# network are available so /var/lib/containerd and the overlay modules exist.
+After=network.target local-fs.target
+Wants=network.target
+
+[Service]
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=/usr/local/bin/containerd --config /etc/containerd/config.toml
+Restart=always
+RestartSec=5
+# ctr launches containers with their own cgroups; delegate the whole slice so
+# systemd does not fight containerd over cgroup placement.
+Delegate=yes
+KillMode=process
+# Container runtimes need a high fd limit and no task cap.
+LimitNOFILE=1048576
+TasksMax=infinity
+# Hardening: no privilege escalation, read-only /usr and /boot are fine for a
+# daemon that only needs /var/lib/containerd, /run/containerd, and the socket.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/containerd /run/containerd /etc/containerd
+
+[Install]
+WantedBy=multi-user.target
