@@ -57,7 +57,7 @@ func runSpool(args []string, stdout, _ io.Writer) error {
 	case "list":
 		return spoolList(store, stdout)
 	case "replay":
-		return spoolReplay(cfg, store, subArgs[0], socket.NewClient(socket.DefaultPath, socketTimeout), log)
+		return spoolReplay(cfg, store, subArgs[0], socket.NewClient(socketPath, socketTimeout), log)
 	case "purge":
 		n, err := store.Purge()
 		if err != nil {

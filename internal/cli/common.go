@@ -5,19 +5,30 @@ import (
 	"io"
 	"path/filepath"
 	"time"
+
+	"github.com/ChronicCmposer/gitd/internal/socket"
 )
 
 // Runtime paths pinned by the plan. The image bakes /srv/git (repos),
 // /var/spool/gitd (spool + socket + git HOME per image/fs/etc/passwd), and
 // /usr/local/lib/gitd/hooks (R6-Q2). Config defaults to the /etc/gitd layout
 // used by the systemd units and hook shims (R11-Q7).
-const (
+//
+// The paths are vars (not consts) so tests can point them at temp dirs; the
+// production values never change. This mirrors the ddnsEndpoint/submitWait
+// test-seam pattern used elsewhere in the codebase.
+var (
 	reposRoot     = "/srv/git"
 	spoolDir      = "/var/spool/gitd"
 	hooksDir      = "/usr/local/lib/gitd/hooks"
 	gitHome       = "/var/spool/gitd"
 	defaultConfig = "/etc/gitd/gitd.yaml"
 )
+
+// socketPath is the unix socket for notify/spool replay submissions. It is a
+// var so tests can point it at a temp socket; production uses
+// socket.DefaultPath (/var/spool/gitd/gitd.sock, R9-Q11).
+var socketPath = socket.DefaultPath
 
 // socketTimeout is notify's outer bound on a socket round-trip (R11-Q3).
 const socketTimeout = 60 * time.Second

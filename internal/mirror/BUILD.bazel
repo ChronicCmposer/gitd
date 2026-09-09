@@ -14,7 +14,10 @@ go_library(
 
 go_test(
     name = "mirror_test",
-    srcs = ["mirror_test.go"],
+    srcs = [
+        "mirror_extra_test.go",
+        "mirror_test.go",
+    ],
     embed = [":mirror"],
     deps = [
         "//internal/gitenv",

@@ -79,7 +79,7 @@ func newNotifier(gitdPath string) (*notifier, error) {
 		reposRoot: reposRoot,
 		git:       gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH")),
 		spool:     spool.NewStore(spoolDir, time.Now, gitd.Spool.Retention.D(), log),
-		client:    socket.NewClient(socket.DefaultPath, socketTimeout),
+		client:    socket.NewClient(socketPath, socketTimeout),
 		now:       time.Now,
 		log:       log,
 	}, nil

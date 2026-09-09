@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# gitd: dependency hygiene (R3-Q8) — copied from strimserver's controller-ci
+# pattern and adapted to this repo.
+#
+#  1. go mod verify  — checksum integrity of the downloaded module graph
+#  2. govulncheck    — scan the module's packages against the Go vulnerability
+#                      database (only the built binary's reachable packages)
+#
+# govulncheck is pinned at a known-good version; the first run installs it
+# into the module cache (bazel does not build it — it is a dev-only hygiene
+# tool, like gazelle). The scan runs against the pinned rules_go SDK go binary
+# so the vuln DB matches the Go toolchain we ship.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# Pinned govulncheck version (semver tag on golang.org/x/vuln).
+GOVULNCHECK_VERSION="${GOVULNCHECK_VERSION:-v1.1.4}"
+
+OUTPUT_BASE="$(bazel info output_base)"
+GO_BIN="$OUTPUT_BASE/external/rules_go++go_sdk+go_sdk/bin/go"
+if [[ ! -x "$GO_BIN" ]]; then
+    bazel build @io_bazel_rules_go//go >/dev/null 2>&1 || true
+    GO_BIN="$OUTPUT_BASE/external/rules_go++go_sdk+go_sdk/bin/go"
+fi
+
+echo "gitd: check-deps: go mod verify"
+"$GO_BIN" mod verify
+
+echo "gitd: check-deps: govulncheck $GOVULNCHECK_VERSION (Go vuln DB)"
+if command -v govulncheck >/dev/null 2>&1 && govulncheck -version 2>/dev/null | grep -q "$GOVULNCHECK_VERSION"; then
+    govulncheck ./...
+else
+    echo "gitd: check-deps: installing govulncheck $GOVULNCHECK_VERSION"
+    "$GO_BIN" run "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION" ./...
+fi

@@ -16,7 +16,6 @@ import (
 	"github.com/ChronicCmposer/gitd/internal/mirror"
 	"github.com/ChronicCmposer/gitd/internal/objectstore/s3"
 	"github.com/ChronicCmposer/gitd/internal/serve"
-	"github.com/ChronicCmposer/gitd/internal/socket"
 	"github.com/ChronicCmposer/gitd/internal/spool"
 	"github.com/ChronicCmposer/gitd/internal/sshcmd"
 	"github.com/ChronicCmposer/gitd/internal/webhook"
@@ -100,7 +99,7 @@ func runServe(args []string, _, _ io.Writer) error {
 		Webhooks:          rt.Webhooks,
 		Deliver:           deliverer.Deliver,
 		ReposRoot:         reposRoot,
-		SocketPath:        socket.DefaultPath,
+		SocketPath:        socketPath,
 		Now:               time.Now,
 		Log:               log,
 		SweepInterval:     time.Minute,

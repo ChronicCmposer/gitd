@@ -1,0 +1,20 @@
+# Mutation-testing binary facade (Phase 9, R4-Q1).
+#
+# Builds the pinned go-mutesting v2.7.9 binary hermetically via rules_go.
+# go_deps generates BUILD files for every module fetched from go.mod, so the
+# upstream cmd/go-mutesting go_binary resolves at
+# @com_github_jonbaldie_go_mutesting_v2//cmd/go-mutesting (public visibility);
+# this alias gives callers a stable //tools/mutesting label.
+#
+# The binary must build with cgo disabled: it links github.com/zimmski/osutil,
+# whose cgo-gated capture_linux.go uses syscall.Dup2 (removed in Go 1.26).
+# The mutesting binary only needs osutil.CopyFile and only ever execs `go test`
+# subprocesses, so a pure (cgo-free) build is safe and selects the
+# capture_notlinux.go variant. Callers pass the pure flag on the command line
+# (the Makefile facade and mutate.yml do this for every invocation):
+#
+#   bazel run --@io_bazel_rules_go//go/config:pure //tools/mutesting -- ...
+alias(
+    name = "mutesting",
+    actual = "@com_github_jonbaldie_go_mutesting_v2//cmd/go-mutesting",
+)

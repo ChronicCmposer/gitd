@@ -1,6 +1,6 @@
 # hookshim shared implementation for the git hook shims (R7-Q10).
 
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -9,4 +9,10 @@ go_library(
     srcs = ["hookshim.go"],
     importpath = "github.com/ChronicCmposer/gitd/internal/hookshim",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "hookshim_test",
+    srcs = ["hookshim_test.go"],
+    embed = [":hookshim"],
 )

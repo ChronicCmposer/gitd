@@ -40,8 +40,11 @@ go_library(
 go_test(
     name = "cli_test",
     srcs = [
+        "cli_extra_test.go",
         "cli_test.go",
+        "notify_entry_test.go",
         "notify_test.go",
+        "serve_spool_test.go",
     ],
     embed = [":cli"],
     deps = [

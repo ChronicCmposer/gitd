@@ -1,0 +1,19 @@
+# gitd coverage-floor exceptions (Phase 9, R4-Q4).
+#
+# Packages listed here are exempt from the >=80% statement-coverage floor.
+# Each entry is a package path (as passed to `go test`, e.g. ./internal/version)
+# followed by a rationale. The rule is: strengthen tests first, never weaken;
+# ONLY thin wrappers or trivial constant packages earn a place here.
+#
+# Triage order per R4-Q3/R4-Q4:
+#   1. add tests to kill the mutants / cover the statements
+#   2. only if the package is a thin wrapper or carries no logic, list it here
+
+./internal/objectstore/s3
+#   Rationale (R4-Q4): thin passthrough over the pinned aws-sdk-go-v2 S3
+#   client (R6-Q7). Every method is one SDK call plus error wrapping; there
+#   is no client-injection seam (the *s3.Client is private), so exercising
+#   the methods requires a fake S3 endpoint. The consumer-side contract is
+#   covered by objectstore.MemoryStore tests and the mirror/serve tests that
+#   drive it; s3 itself adds no logic beyond the SDK call. A seam change is
+#   deliberately out of scope for Phase 9 (do not bloat thin wrappers).

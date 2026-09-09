@@ -80,7 +80,8 @@ The Makefile is a thin facade over Bazel + the dist pipeline
 make build        # bazel build //...
 make test         # bazel test //...
 make fuzz         # fuzz the SSH_ORIGINAL_COMMAND tokenizer (bazel run rules_go test -fuzz=...)
-make mutate       # mutation testing (Phase 9; stub until then)
+make mutate       # mutation testing (Phase 9; full baseline-aware run)
+make mutate-ci    # CI mutation gate (git-diff mode, zero new survivors)
 make coverage     # statement coverage via the pinned rules_go SDK
 ```
 

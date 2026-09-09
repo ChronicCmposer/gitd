@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -115,6 +116,39 @@ func TestClientTimeout(t *testing.T) {
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Errorf("Bundle took %v, want ~300ms", time.Since(start))
+	}
+}
+
+func TestClientDeliverFailureIsError(t *testing.T) {
+	// 404-style unknown plugin-id reply (R13-Q8): the client must surface it
+	// as a final failure so the event dead-letters.
+	path, stop := serveFake(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "plugin-id not configured", http.StatusNotFound)
+	}))
+	defer stop()
+
+	c := NewClient(path, 60*time.Second)
+	err := c.Deliver(context.Background(), "ghost", "ev1")
+	if err == nil {
+		t.Fatal("Deliver on 404 = nil error, want error")
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("plugin-id not configured")) {
+		t.Errorf("Deliver err = %v", err)
+	}
+}
+
+func TestClientBundleDecodeFailure(t *testing.T) {
+	// A 200 reply that is not valid BundleResult JSON must error, not return
+	// a zero value.
+	path, stop := serveFake(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"uploaded":`) // truncated JSON
+	}))
+	defer stop()
+
+	c := NewClient(path, 60*time.Second)
+	if _, err := c.Bundle(context.Background(), "r"); err == nil {
+		t.Fatal("Bundle with bad JSON = nil error, want error")
 	}
 }
 

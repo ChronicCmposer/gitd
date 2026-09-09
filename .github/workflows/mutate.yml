@@ -1,0 +1,103 @@
+# gitd mutation-testing workflow (Phase 9, R4-Q5 / R4-Q3 / R3-Q8).
+#
+# Two gates, per the plan:
+#
+#   PR job  (mutation-gate):   `make mutate-ci` — git-diff mode over the changed
+#                              internal/ packages, zero NEW survivors via the
+#                              committed baseline + --fail-on-escaped. This is
+#                              the R4-Q3 PR gate and blocks the merge.
+#
+#   Nightly (mutation-full):   `make mutate` — full baseline-aware run over every
+#                              internal/ package. The MSI (Mutation Score
+#                              Indicator) report is uploaded as a CI artifact
+#                              and reported as a trend in README (R4-Q3: MSI is
+#                              trended, NOT gated). The nightly also runs
+#                              `make check-deps` (go mod verify + govulncheck
+#                              against the Go vuln DB, R3-Q8) — a network-
+#                              dependent hygiene check that should not block PRs.
+#
+# Both mutation jobs are hermetic (R3-Q8): they build the pinned go-mutesting
+# v2.7.9 binary with Bazel (//tools/mutesting) and run the go test subprocesses
+# against the pinned rules_go SDK go binary that the scripts put on PATH.
+#
+# Token: contents: read only. No secrets are referenced (R3-Q8).
+name: mutate
+
+on:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *" # 03:17 UTC nightly — avoids the top-of-hour stampede
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-gate:
+    name: mutation gate (changed internal/ packages, zero new survivors)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # merge-base against origin/main needs full history
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      # Hermetic toolchain: bazelisk builds //tools/mutesting from go_deps;
+      # the mutate scripts read the rules_go SDK go binary via `bazel info`.
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      - name: mutation gate (git-diff mode, zero NEW survivors)
+        run: make mutate-ci BASE=origin/main
+        env:
+          MUTATE_REPORTS_DIR: gitd-mutation-reports
+
+  mutation-full:
+    name: nightly full mutation run (MSI report)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      - name: full baseline-aware mutation run
+        run: make mutate
+        env:
+          MUTATE_REPORTS_DIR: gitd-mutation-reports
+
+      - name: upload MSI report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitd-mutation-reports
+          path: gitd-mutation-reports/
+          if-no-files-found: error
+
+  check-deps:
+    name: nightly dependency hygiene (go mod verify + govulncheck)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false
+
+      # tools/check-deps resolves the rules_go SDK go via `bazel info output_base`,
+      # so Bazel must be present even though this is a Go hygiene job.
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      - name: go mod verify + govulncheck (R3-Q8)
+        run: make check-deps

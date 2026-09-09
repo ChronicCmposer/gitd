@@ -1,0 +1,59 @@
+# gitd CI correctness gates (R3-Q8).
+#
+# R3-Q8 requires, somewhere in CI: govulncheck against the Go vuln DB (in
+# adapted tools/check-deps), `go test -race` for all packages, and minimal
+# GitHub Actions token permissions (contents: read, no secrets in workflows).
+#
+# The govulncheck + go mod verify hygiene check is `make check-deps`; it is
+# intentionally NOT gated here because it hits the Go vuln DB at run time (a
+# network dependency that should not block every PR). It is a nightly cron job
+# alongside the mutation full run in mutate.yml.
+#
+# This workflow owns the build + race-test gates that must block every PR:
+#   - bazel test //...  (the hermetic rules_go build + test of every target)
+#   - go build ./...   (the module must compile against the pinned toolchain)
+#   - go vet ./...      (static checks, fails loudly on suspicious code)
+#   - go test ./...     (plain tests)
+#   - go test -race ./...  (the R3-Q8 race detector for all packages)
+#
+# Token: contents: read only. No secrets are referenced.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: bazel + go build + vet + race
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: false # rules_go SDK (not the Actions Go) is the build toolchain; avoid double caching
+
+      # Hermetic build + test of every Bazel target (rules_go SDK).
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      - name: bazel test //...
+        run: bazel test //...
+
+      - name: go build ./...
+        run: go build ./...
+
+      - name: go vet ./...
+        run: go vet ./...
+
+      - name: go test ./...
+        run: go test ./...
+
+      - name: go test -race ./...  (R3-Q8)
+        run: go test -race ./...

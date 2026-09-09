@@ -20,3 +20,7 @@ host/
 # dirs + gitd-bundle-<sha>.tar.gz + gitd-container.tar). These are build-time
 # artifacts regenerated on every deploy, not source.
 cloudformation/out/
+
+# --- Phase 9 mutation reports: generated, uploaded as CI artifacts, not source --
+# make mutate / mutate-ci write go-mutesting-*.json + report.json here by default.
+gitd-mutation-reports/

@@ -1,6 +1,14 @@
 # gitd Bazel configuration.
 # See https://bazel.build/run/bazelrc for the full flag reference.
 
+# Pure Go builds (no cgo): the entire module is stdlib + pure-Go deps. The
+# pinned go-mutesting binary additionally REQUIRES pure builds — it links
+# github.com/zimmski/osutil, whose cgo-gated capture_linux.go uses
+# syscall.Dup2 (removed in Go 1.26). With cgo off, rules_go selects the
+# capture_notlinux.go variant and the mutation tool compiles against the
+# pinned rules_go SDK (Phase 9, R4-Q1).
+build --@io_bazel_rules_go//go/config:pure
+
 # Show the full test log only when a test fails.
 test --test_output=errors
 

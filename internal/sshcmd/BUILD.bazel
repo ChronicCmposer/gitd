@@ -20,8 +20,13 @@ go_library(
 go_test(
     name = "sshcmd_test",
     srcs = [
+        "gateway_test.go",
         "identity_test.go",
         "tokenize_test.go",
     ],
     embed = [":sshcmd"],
+    deps = [
+        "//internal/disk",
+        "//internal/gitenv",
+    ],
 )

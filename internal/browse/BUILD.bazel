@@ -32,6 +32,7 @@ go_library(
 go_test(
     name = "browse_test",
     srcs = [
+        "browse_extra_test.go",
         "browse_test.go",
         "testcerts_test.go",
     ],

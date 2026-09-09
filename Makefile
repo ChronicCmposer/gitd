@@ -1,11 +1,12 @@
 # gitd Makefile facade — thin wrappers over the Bazel build + dist pipeline.
 #
 # Phase 2 makes publish-openssh-dist and check-openssh-dist-deps real and adds
-# the analogous per-product determinism/publish targets (2.1-2.4). Targets
-# that land in later phases (mutate, mutate-ci, deploy) remain loud stubs.
+# the analogous per-product determinism/publish targets (2.1-2.4). Phase 9
+# makes mutate, mutate-ci, and coverage real (R4-Q1..R4-Q4).
 
 SHELL := /bin/bash
 DIST := tools/dist
+MUTATION := tools/mutation
 
 .PHONY: build test fuzz mutate mutate-ci coverage \
         check-openssh-dist check-git-dist check-fish-dist check-sudo-dist \
@@ -13,7 +14,7 @@ DIST := tools/dist
         check-pinned-go-dist check-openssh-dist-deps gen-dist-pins \
         publish-openssh-dist publish-git-dist publish-fish-dist \
         publish-sudo-dist publish-ca-certs-dist publish-containerd-dist \
-        publish-runc-dist image image-container deploy update
+        publish-runc-dist image image-container deploy update check-deps
 
 build: ## Build everything.
 	bazel build //...
@@ -24,15 +25,17 @@ test: ## Run all tests.
 fuzz: ## Fuzz the SSH_ORIGINAL_COMMAND tokenizer (rules_go has no native fuzz support).
 	bazel run @io_bazel_rules_go//go -- test -fuzz=FuzzParseCommand ./internal/sshcmd/...
 
-mutate: ## Run mutation testing on changed lines (Phase 9).
-	@echo "gitd: mutation testing not yet implemented in this phase (Phase 9)"
+mutate: ## Full baseline-aware mutation run over all internal/ packages (Phase 9, R4-Q1/Q3).
+	$(MUTATION)/mutate.sh
 
-mutate-ci: ## CI mutation gate: zero new survivors on changed lines (Phase 9).
-	@echo "gitd: mutation CI gate not yet implemented in this phase (Phase 9)"
+mutate-ci: ## CI mutation gate: git-diff mode, zero NEW survivors (Phase 9, R4-Q3). BASE=origin/main
+	$(MUTATION)/mutate-ci.sh $(BASE)
 
-coverage: ## Statement coverage via the pinned rules_go SDK.
-	bazel run @io_bazel_rules_go//go -- test -coverprofile=/tmp/gitd-cover.out ./internal/...
-	bazel run @io_bazel_rules_go//go -- tool cover -func=/tmp/gitd-cover.out
+coverage: ## Statement-coverage floor >=80% per internal package (Phase 9, R4-Q4).
+	tools/coverage/coverage.sh
+
+check-deps: ## Dependency hygiene: go mod verify + govulncheck (R3-Q8).
+	tools/check-deps
 
 # --- Dist pipeline (Phase 2) -------------------------------------------------
 

@@ -16,7 +16,11 @@ go_library(
 
 go_test(
     name = "serve_test",
-    srcs = ["serve_test.go"],
+    srcs = [
+        "serve_extra_test.go",
+        "serve_handlers_test.go",
+        "serve_test.go",
+    ],
     embed = [":serve"],
     deps = [
         "//internal/config",
