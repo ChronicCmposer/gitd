@@ -13,7 +13,7 @@ DIST := tools/dist
         check-pinned-go-dist check-openssh-dist-deps gen-dist-pins \
         publish-openssh-dist publish-git-dist publish-fish-dist \
         publish-sudo-dist publish-ca-certs-dist publish-containerd-dist \
-        publish-runc-dist image image-container deploy
+        publish-runc-dist image image-container deploy update
 
 build: ## Build everything.
 	bazel build //...
@@ -110,3 +110,6 @@ image-container: ## Produce gitd-container.tar for `ctr images import` (R3-Q2).
 
 deploy: ## Deploy the stack via CloudFormation (Phase 7). Usage: make deploy ARGS="--key-name KP --eip-allocation-id EIP"
 	./cloudformation/deploy.sh $(ARGS)
+
+update: ## In-place update of a live server (Phase 8.1, R3-Q10/R6-Q3). Usage: make update ARGS="--sha256 <hex>"
+	./cloudformation/update.sh $(ARGS)
