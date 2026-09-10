@@ -717,12 +717,22 @@ dump_sshd_diagnostics() {
     echo "gitd: userdata: ----- sshd_config on host -----"
     ls -l /etc/gitd/sshd_config 2>/dev/null || echo "(no /etc/gitd/sshd_config)"
     head -n 30 /etc/gitd/sshd_config 2>/dev/null || echo "(cannot read /etc/gitd/sshd_config)"
-    echo "gitd: userdata: ----- revoked_keys on host -----"
-    cat /etc/gitd/revoked_keys 2>&1 || echo "(revoked_keys unreadable or empty)"
-    echo "gitd: userdata: ----- auth_principals/git on host -----"
-    cat /etc/gitd/auth_principals/git 2>&1 || echo "(auth_principals/git unreadable or empty)"
-    echo "gitd: userdata: ----- auth_principals/admin on host -----"
-    cat /etc/gitd/auth_principals/admin 2>&1 || echo "(auth_principals/admin unreadable or empty)"
+    echo "gitd: userdata: ----- in-container sshd auth files (overlay view) -----"
+    # Best-effort (informational): dump the sshd auth files through the same
+    # /etc/gitd -> /etc/ssh overlay the container sshd trusts (RevokedKeys +
+    # AuthorizedPrincipalsFile). The image is from-scratch — no /bin/sh, no
+    # cat — so the one-shot uses the image's fish shell (builtin read/echo)
+    # on the exact paths sshd consults; each read carries 2>&1 and an
+    # unreadable/missing file falls back to a marker, so every file still
+    # surfaces in the boot log. The /tmp tmpfs lets runc start the --read-only
+    # one-shot (see the CA-fingerprint probe above); --rm so the probe never
+    # lingers.
+    ctr -n default run --rm --read-only \
+        --mount type=bind,source=/etc/gitd,destination=/etc/ssh,options=rbind:ro \
+        --mount type=tmpfs,destination=/tmp,options=mode=1777 \
+        git.cmposer.cc/gitd:latest gitd-sshd-auth-fp \
+        /usr/local/bin/fish -c 'set -l files /etc/ssh/revoked_keys /etc/ssh/auth_principals/git /etc/ssh/auth_principals/admin; for f in $files; echo "--- $f ---"; if test -r $f; while read -l line; echo $line; end < $f 2>&1; else; echo "($f unreadable or missing)"; end; end' 2>&1 \
+        || echo "(in-container sshd auth-files dump not available)"
     echo "gitd: userdata: ----- in-container sshd config parse -----"
     # Best-effort (informational): exec a config test inside the running sshd
     # container. Requires the container task to be up; a failure is not fatal —
