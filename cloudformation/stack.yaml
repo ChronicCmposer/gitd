@@ -289,7 +289,17 @@ Resources:
               # Minimal bootstrap: install AWS helpers, pull the deployment
               # bundle from S3, verify its sha256 (fail-fast, R3-Q2), then run
               # the full boot script (cloudformation/userdata.sh) packaged in it.
-              dnf install -y -q aws-cli aws-cfn-bootstrap
+              # aws-cfn-bootstrap ships in current AL2023 repos but not older AMIs;
+              # fall back to the AWS-documented pip3 install from the
+              # cloudformation-examples tarball and symlink it into /opt/aws/bin.
+              dnf install -y -q aws-cli
+              if ! dnf install -y -q aws-cfn-bootstrap 2>/dev/null; then
+                  dnf install -y -q python3-pip
+                  pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+                  mkdir -p /opt/aws/bin
+                  ln -sf /usr/local/bin/cfn-signal /opt/aws/bin/cfn-signal
+                  ln -sf /usr/local/bin/cfn-init   /opt/aws/bin/cfn-init
+              fi
 
               mkdir -p /opt/gitd-bundle
               aws s3 cp "s3://${BucketName}/${BundleS3Key}" /opt/gitd-bundle/bundle.tar.gz \
