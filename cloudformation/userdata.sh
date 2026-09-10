@@ -277,6 +277,7 @@ ClientAliveInterval 300
 ClientAliveCountMax 3
 MaxSessions 2
 PerSourcePenalties yes
+PidFile /run/sshd/sshd.pid
 LogLevel VERBOSE
 HostKey /etc/ssh/ssh_host_ed25519_key
 TrustedUserCAKeys /etc/ssh/trusted_user_ca_keys.pem
@@ -529,6 +530,7 @@ ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --mount type=bind,source=/home/admin,destination=/home/admin,options=rbind:rw \
   --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
   --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
+  --mount type=tmpfs,destination=/run/sshd,options=mode=1777 \
   git.cmposer.cc/gitd:latest gitd-sshd /usr/local/sbin/sshd -D -f /etc/ssh/sshd_config -e
 Restart=always
 RestartSec=5

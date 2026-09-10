@@ -35,6 +35,7 @@ ClientAliveInterval 300
 ClientAliveCountMax 3
 MaxSessions 2
 PerSourcePenalties yes
+PidFile /run/sshd/sshd.pid
 
 # Logging
 LogLevel VERBOSE
