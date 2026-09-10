@@ -463,19 +463,24 @@ echo "gitd: userdata: writing systemd units"
 #     one token and silently drops nothing.
 cat > /etc/systemd/system/gitd-serve.service <<'SERVE_EOF'
 [Unit]
-Description=gitd browse (:443 mTLS) + socket server (uid 1001)
+# Runs as root (like gitd-sshd/gitd-ddns): as non-root with only
+# CAP_NET_BIND_SERVICE, containerd/runc does not put the cap into the process's
+# EFFECTIVE set, so binding privileged :443 is denied (containerd 2.3.5).
+# CAP_DAC_OVERRIDE is added (and NOT dropped) so root serve can read/write the
+# gitd material (/var/spool/gitd is git:git 0700; /etc/gitd root:git 0640).
+Description=gitd browse (:443 mTLS) + socket server (runs as root)
 After=containerd.service
 Requires=containerd.service
 
 [Service]
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
-  --user 1001:1001 \
   --read-only \
-  --cap-drop CAP_CHOWN --cap-drop CAP_DAC_OVERRIDE --cap-drop CAP_FSETID \
-  --cap-drop CAP_FOWNER --cap-drop CAP_MKNOD --cap-drop CAP_NET_RAW \
+  --cap-drop CAP_CHOWN --cap-drop CAP_FSETID --cap-drop CAP_FOWNER \
+  --cap-drop CAP_MKNOD --cap-drop CAP_NET_RAW \
   --cap-drop CAP_SETGID --cap-drop CAP_SETUID --cap-drop CAP_SETFCAP \
   --cap-drop CAP_SETPCAP --cap-drop CAP_SYS_CHROOT --cap-drop CAP_KILL \
   --cap-drop CAP_AUDIT_WRITE --cap-add CAP_NET_BIND_SERVICE \
+  --cap-add CAP_DAC_OVERRIDE \
   --memory-limit 134217728 \
   --mount type=bind,source=/srv/git,destination=/srv/git,options=rbind:ro \
   --mount type=bind,source=/var/spool/gitd,destination=/var/spool/gitd,options=rbind:rw \
