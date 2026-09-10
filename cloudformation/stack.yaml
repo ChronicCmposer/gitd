@@ -184,10 +184,12 @@ Resources:
         Rules:
           - Id: NoncurrentExpire30d
             Status: Enabled
+            Filter: {}
             NoncurrentVersionExpiration:
               NoncurrentDays: 30
           - Id: AbortIncompleteMultipartUpload7d
             Status: Enabled
+            Filter: {}
             AbortIncompleteMultipartUpload:
               DaysAfterInitiation: 7          # belt-and-braces (R12-Q9)
 
