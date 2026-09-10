@@ -279,6 +279,7 @@ PerSourcePenalties yes
 PidFile /run/sshd/sshd.pid
 LogLevel VERBOSE
 HostKey /etc/ssh/ssh_host_ed25519_key
+HostCertificate /etc/ssh/ssh_host_ed25519_key-cert.pub
 TrustedUserCAKeys /etc/ssh/trusted_user_ca_keys.pem
 AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 RevokedKeys /etc/ssh/revoked_keys
@@ -660,6 +661,55 @@ WantedBy=timers.target
 REBOOT_TIMER_EOF
 systemctl daemon-reload
 systemctl enable --now gitd-reboot.timer
+
+# --- debug-only: stream gitd-sshd verbose journal to console (post-boot) -------------
+# After an SSH auth failure the operator must be able to read the exact rejection
+# reason from `aws ec2 get-console-output` / serial console WITHOUT any host-plane
+# access (no SSH/SSM). gitd-sshd runs `sshd -D -e`, so its VERBOSE auth decisions
+# land in `journalctl -u gitd-sshd.service` on the host; this helper tees those
+# lines to /dev/console (fallback /dev/kmsg) for 20 minutes after boot. It is
+# purely diagnostic and self-bounds (timeout 1200) so it never runs forever; a
+# missing binary or unwritable console device is a silent no-op, never a boot break.
+cat > /etc/systemd/system/gitd-sshd-journal.service <<'SSHD_JOURNAL_SERVICE_EOF'
+[Unit]
+Description=Stream gitd-sshd verbose auth journal to console (debug helper, 20 min window)
+
+[Service]
+Type=oneshot
+# Debug-only: bounded follow of the gitd-sshd journal; tees each new VERBOSE line
+# to the console (fallback /dev/kmsg) so post-boot SSH auth failures are readable
+# via get-console-output without any host access. stdout stays in this unit's
+# journal too. Guarded: a missing binary or unwritable device is a silent no-op,
+# never a boot break.
+ExecStart=/bin/sh -c '\
+  command -v timeout >/dev/null 2>&1 || exit 0; \
+  command -v journalctl >/dev/null 2>&1 || exit 0; \
+  command -v tee >/dev/null 2>&1 || exit 0; \
+  OUT=/dev/console; [ -w "$OUT" ] || OUT=/dev/kmsg; [ -w "$OUT" ] || OUT=; \
+  if [ -n "$OUT" ]; then \
+    echo "gitd: userdata: ----- sshd journal -> console (20 min window) -----" | tee "$OUT"; \
+  else \
+    echo "gitd: userdata: ----- sshd journal -> console (20 min window) -----"; \
+  fi; \
+  if [ -n "$OUT" ]; then \
+    timeout 1200 journalctl -u gitd-sshd.service -f -n 20 --no-pager 2>/dev/null | tee "$OUT"; \
+  else \
+    timeout 1200 journalctl -u gitd-sshd.service -f -n 20 --no-pager 2>/dev/null; \
+  fi; \
+  exit 0'
+SSHD_JOURNAL_SERVICE_EOF
+cat > /etc/systemd/system/gitd-sshd-journal.timer <<'SSHD_JOURNAL_TIMER_EOF'
+[Unit]
+Description=Start gitd-sshd journal -> console stream once, 90s after boot
+
+[Timer]
+OnBootSec=90s
+
+[Install]
+WantedBy=timers.target
+SSHD_JOURNAL_TIMER_EOF
+systemctl daemon-reload
+systemctl enable --now gitd-sshd-journal.timer
 
 echo "gitd: userdata: waiting for units + running liveness probe"
 # --- wait for units + liveness probe (R9-Q9) ----------------------------------------

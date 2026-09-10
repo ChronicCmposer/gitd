@@ -42,6 +42,9 @@ LogLevel VERBOSE
 
 # Host key: Ed25519 only (R13-Q3). No RSA/ECDSA/DSA host keys in the image.
 HostKey /etc/ssh/ssh_host_ed25519_key
+# Host certificate (R13-Q3): lives under /etc/gitd on the host and is overlaid
+# onto /etc/ssh at runtime alongside the host key and CA material.
+HostCertificate /etc/ssh/ssh_host_ed25519_key-cert.pub
 
 # CA-based authentication (R2-Q4, R2-Q14)
 TrustedUserCAKeys /etc/ssh/trusted_user_ca_keys.pem
