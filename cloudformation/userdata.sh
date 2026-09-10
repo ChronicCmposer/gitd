@@ -448,7 +448,7 @@ Requires=containerd.service
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --user 1001:1001 \
   --read-only \
-  --cap-drop ALL --cap-add NET_BIND_SERVICE \
+  --cap-drop ALL --cap-add CAP_NET_BIND_SERVICE \
   --memory-limit 134217728 \
   --mount type=bind,source=/srv/git,destination=/srv/git,options=rbind:ro \
   --mount type=bind,source=/var/spool/gitd,destination=/var/spool/gitd,options=rbind:rw \
@@ -472,7 +472,7 @@ Requires=containerd.service
 # revoked_keys), matching the image's baked paths.
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --read-only \
-  --cap-drop ALL --cap-add CHOWN --cap-add SETGID --cap-add SETUID --cap-add SYS_CHROOT \
+  --cap-drop ALL --cap-add CAP_CHOWN --cap-add CAP_SETGID --cap-add CAP_SETUID --cap-add CAP_SYS_CHROOT \
   --memory-limit 335544320 \
   --mount type=bind,source=/srv/git,destination=/srv/git,options=rbind:rw \
   --mount type=bind,source=/var/spool/gitd,destination=/var/spool/gitd,options=rbind:rw \
