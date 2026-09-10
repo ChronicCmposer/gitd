@@ -15,9 +15,11 @@ boot. This script enforces that ordering with early `set -euo pipefail` exits.
 
 These must all be true before the first deploy:
 
-- **Authenticated `gh` CLI.** `gh` installed and logged in (`gh auth login`),
-  with `repo` scope over `ChronicCmposer/gitd` (used to publish
-  `gitd-container.tar` to the `gitd-container` family release).
+- **Authenticated `gh` CLI (create path only).** `gh` installed and logged in
+  (`gh auth login`), with `repo` scope over `ChronicCmposer/gitd`. Under
+  Option B, `deploy.sh` assumes the image release is already signed +
+  published by `make release`; `gh` is consulted only when the release is
+  missing (to create it).
 - **AWS credentials.** `aws` CLI configured with credentials for the deploy
   account/region (`us-east-2` by default). The instance role grants only
   read/`repos/` access to S3 and `ssm:GetParameter` on `/gitd/*`; your own
@@ -30,8 +32,12 @@ These must all be true before the first deploy:
   `runc-*.linux-<arch>.tar.gz` under `tools/dist/out/`) and the OCI image
   (`tools/dist/out/gitd-container.tar`, via `make image-container`, or via the
   versioned `make bump-version LEVEL=<major|minor|patch>` + `make release`
-  flow — see the README "Versioning & releases" section). `deploy.sh`
-  fails fast if these are missing (see step 2).
+  flow — see the README "Versioning & releases" section). **`make release`
+  must have run first**: it signs `gitd-container.tar` → `gitd-container.tar.asc`
+  and publishes tar + `.asc` to the `gitd-container` family release.
+  `deploy.sh` VERIFIES that already-signed image (it never re-signs) and only
+  creates the release if it is missing; it fails fast if these are absent
+  (see step 2).
 - **EC2 keypair name** that already exists in the region (passed with
   `--key-name`). It trails `cloudformation/stack.yaml`'s
   `AWS::EC2::KeyPair::KeyName` as the SSM-host-plane emergency key. It is not
@@ -77,9 +83,9 @@ before anything else runs.
 
 `deploy.sh` runs these steps in order (R3-Q2/R3-Q3):
 
-1. **Validate inputs.** `aws`, `gh`, `sha256sum`, `tar` must be on PATH;
-   `gh` must be authenticated (`gh auth login`); the image tarball, both
-   host-binary tarballs, the
+1. **Validate inputs.** `aws`, `sha256sum`, `tar` must be on PATH (`gh` is
+   required only in the create path, step 4); the image tarball **and its
+   `.asc`** (signed by `make release`), both host-binary tarballs, the
    configs, `userdata.sh`, `gitd-cert-sync.sh`, the containerd unit, and
    `config.toml` must all exist.
 2. **Compute artifact sha256 pins** (R6-Q3 discipline): the image, containerd,
@@ -96,12 +102,16 @@ before anything else runs.
    taken over the tarball and it is stored in the bundle dir as
    `gitd-bundle-<sha256>.tar.gz` and uploaded to
    `s3://<bucket>/bundles/gitd-bundle-<sha256>.tar.gz`.
-4. **Publish the image** to the `gitd-container` family release on
-   `ChronicCmposer/gitd` (create if absent, `--clobber` upload if present)
-   and to `s3://<bucket>/image/gitd-container.tar`. The image is GPG-signed
-   first (`gitd-container.tar.asc`, operator key) and the `.asc` is uploaded
-   alongside to both channels. The pinned `IMAGE_SHA256` is recorded in the
-   release notes.
+4. **Verify + publish the image (Option B).** `deploy.sh` GPG-VERIFIES the
+   already-signed image against the pinned public key
+   (`verify_artifact <tar> <gitd-signing-key.asc>`, reusing the
+   `gitd-container.tar.asc` produced by `make release`) — it does NOT re-sign
+   or re-upload. It creates the `gitd-container` family release on
+   `ChronicCmposer/gitd` ONLY if it is missing (`gh` auth is then required);
+   if the release already exists it skips it entirely (no `--clobber`). The
+   tar and `.asc` are still mirrored to `s3://<bucket>/image/` (idempotent,
+   same-bytes fallback, not a release). The pinned `IMAGE_SHA256` is recorded
+   in the release notes.
 5. **Push certs to SSM** via `cloudformation/upload-certs.sh` (R3-Q3) — the
    TLS server material, the probe client cert, the SSH host key/cert, and the
    SSH CA public key, all SecureString under `/gitd/*`, encrypted with the
@@ -127,10 +137,12 @@ signature adds who-signed-it):
 
 - `deploy.sh` hashes every payload it carries and passes the pins as
   CloudFormation **parameters** (`BundleSha256`, `ImageSha256`,
-  `ContainerdSha256`, `RuncSha256`, plus `RepoRefSha`). It then **GPG-signs**
-  `gitd-container.tar` (detached ASCII-armored `gitd-container.tar.asc`, using
-  the operator's key — `GPG_KEY_ID`, else the default) and uploads the tar
-  **and** the `.asc` to the `gitd-container` release and `s3://<bucket>/image/`.
+  `ContainerdSha256`, `RuncSha256`, plus `RepoRefSha`). It then
+  **GPG-verifies** the already-signed `gitd-container.tar` against the pinned
+  public key (`verify_artifact <tar> <pinned-key>` reusing the detached
+  `gitd-container.tar.asc` produced by `make release` — deploy.sh never
+  re-signs). If the `gitd-container` release is missing it creates it; the tar
+  **and** the `.asc` are mirrored to `s3://<bucket>/image/`.
 - The **bundle** pin is checked in the stack's UserData bootstrap:
   `echo "<BundleSha256>  bundle.tar.gz | sha256sum -c -` aborts boot on
   mismatch.
@@ -183,9 +195,9 @@ Watch for the most common boot failures:
 
 - GPG signature verification FAILED / `.asc` missing → the image was not
   signed by the key matching the bundle's pinned `gitd-signing-key.asc` (or the
-  `.asc` was not published next to the tar). Rebuild + re-sign with the
-  operator's key, republish tar **and** `.asc`, re-run deploy so the bundle
-  carries a consistent public key.
+  `.asc` was not published next to the tar). Re-run `make release` to re-sign
+  and republish tar **and** `.asc`, then re-run deploy so the bundle carries a
+  consistent public key.
 - sha256 mismatch / empty image tarball → artifact keyed to the wrong build;
   rebuild + republish, re-run deploy so the pins update.
 - `ctr images import failed` or

@@ -2,10 +2,11 @@
 # cloudformation/deploy.sh — build the deployment bundle and deploy the stack.
 #
 # Phase 7 orchestration (7.3): packages the host binaries + configs + userdata
-# into a deployment bundle, publishes gitd-container.tar to the gitd-container
-# family release on ChronicCmposer/gitd, pushes the client-side certs to SSM,
-# then creates/updates the CloudFormation stack. Fail-fast and idempotent-ish
-# (create if absent, update if present).
+# into a deployment bundle, VERIFIES the already-signed gitd-container.tar
+# (signed + published by 'make release') against the pinned key, creates the
+# gitd-container family release on ChronicCmposer/gitd only if missing, pushes
+# the client-side certs to SSM, then creates/updates the CloudFormation stack.
+# Fail-fast and idempotent-ish (create if absent, update if present).
 #
 # Order matters (R3-Q2/R3-Q3): the bundle, image, and SSM certs must all exist
 # BEFORE create-stack, because the instance's bootstrap pulls them at first
@@ -23,7 +24,9 @@
 #   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
 #   --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
 #   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
-# Environment: an authenticated gh CLI (gh auth login) to publish the image release.
+# Environment: the image release is assumed already signed + published by
+# 'make release' (Option B); deploy.sh VERIFIES it and needs gh CLI only when
+# the release is missing (create path).
 
 set -euo pipefail
 
@@ -81,7 +84,9 @@ Options:
   --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
 
-Environment: authenticated gh CLI (gh auth login) required to publish gitd-container.tar to the gitd-container release on ChronicCmposer/gitd.
+Environment: the image is assumed already signed + published by 'make release'
+(Option B); deploy.sh VERIFIES it against the pinned key and only creates the
+gitd-container release on ChronicCmposer/gitd if missing (gh CLI then required).
 HELP
             exit 0
             ;;
@@ -95,9 +100,8 @@ done
 require_cmd aws
 require_cmd sha256sum
 require_cmd tar
-# Publish to GitHub needs gh installed AND authenticated — fail fast, never
-# silently skip a publish (code-philosophy).
-require_gh_auth
+# gh is needed ONLY in the create path below (when the release is missing);
+# require_gh_auth runs there, not here. aws/sha256sum/tar stay fail-fast.
 
 # Shared GPG signing helpers (sign_artifact / verify_artifact) + the committed
 # pinned public key the bundle carries so the instance can verify provenance.
@@ -128,10 +132,12 @@ RUNC_SHA256="$(sha256sum "${RUNC_FILE}" | cut -d' ' -f1)"
 require_cmd git
 REPO_REF_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 
-# GPG-sign the image BEFORE publishing/packaging: the host verifies the .asc
-# (provenance) before the pinned sha256. sign_artifact fails loudly on any
-# problem, so an unsigned image can never be deployed.
-sign_artifact "${IMAGE_TAR}"
+# GPG-VERIFY the already-signed image against the pinned key before
+# packaging/publishing. The image is signed by 'make release'; deploy.sh does
+# NOT re-sign (Option B — assume the release is already signed).
+# verify_artifact fails loudly on any provenance problem.
+[[ -f "${IMAGE_TAR}.asc" ]] || die "signed image .asc missing: ${IMAGE_TAR}.asc (run 'make release' first — it signs and publishes the image)"
+verify_artifact "${IMAGE_TAR}" "${SIGNING_KEY}"
 
 # --- build the deployment bundle (R13-Q4: configs written verbatim at boot) ---------
 STAGE="$(mktemp -d "${BUNDLE_DIR}/bundle.XXXXXX")"
@@ -169,17 +175,20 @@ aws s3 cp "${BUNDLE_TAR}" "s3://${BUCKET}/${BUNDLE_S3_KEY}" --region "${REGION}"
 echo "gitd: deploy: bundle uploaded to s3://${BUCKET}/${BUNDLE_S3_KEY}"
 
 # --- publish gitd-container.tar to the gitd-container family release on
-# ChronicCmposer/gitd + S3 image fallback -----------------------------------
+# ChronicCmposer/gitd + S3 image fallback. Option B: the release is assumed
+# already signed + published by 'make release'; only create when MISSING. -----
 if gh release view "${GITD_RELEASE_TAG}" --repo "${DIST_REPO}" >/dev/null 2>&1; then
-    gh release upload "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" "${IMAGE_TAR}.asc" --repo "${DIST_REPO}" --clobber
+    echo "gitd: deploy: gitd-container release already exists on ChronicCmposer/gitd; assuming already signed+published, skipping"
 else
+    require_gh_auth
     gh release create "${GITD_RELEASE_TAG}" "${IMAGE_TAR}" "${IMAGE_TAR}.asc" --repo "${DIST_REPO}" \
         --title "gitd OCI image" \
         --notes "gitd-container.tar (R3-Q2). sha256: ${IMAGE_SHA256}. GPG-signed (gitd-signing-key.asc)."
+    echo "gitd: deploy: created gitd-container release on ChronicCmposer/gitd (tar + .asc)"
 fi
 aws s3 cp "${IMAGE_TAR}" "s3://${BUCKET}/image/gitd-container.tar" --region "${REGION}" --only-show-errors
 aws s3 cp "${IMAGE_TAR}.asc" "s3://${BUCKET}/image/gitd-container.tar.asc" --region "${REGION}" --only-show-errors
-echo "gitd: deploy: image published to ${DIST_REPO}@${GITD_RELEASE_TAG} + s3://${BUCKET}/image/ (tar + .asc)"
+echo "gitd: deploy: image verified; S3 fallback mirror at s3://${BUCKET}/image/ (tar + .asc)"
 
 # --- push client-side certs to SSM BEFORE create-stack (R3-Q3) ------------------------
 "${SCRIPT_DIR}/upload-certs.sh"
