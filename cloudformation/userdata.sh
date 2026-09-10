@@ -25,6 +25,12 @@
 
 set -euo pipefail
 
+# Fail-loud (code-philosophy): any unhandled non-zero exit prints the failing
+# command + line number to stderr before aborting. The ERR trap does NOT fire
+# for commands in if-conditions or after ||/&&, so guarded paths (require_env,
+# `if ! command -v gpg`, `curl ... || die`) are unaffected.
+trap 'echo "gitd: userdata: ERROR at line $LINENO (last command: $BASH_COMMAND)" >&2' ERR
+
 # --- helpers ------------------------------------------------------------------
 die() {
     echo "gitd: userdata: $*" >&2
@@ -50,9 +56,13 @@ verify_sha256() {
     }
 }
 # ssm_get <param-name> writes the decrypted value of /gitd/<name> to stdout.
+# Fails loud (code-philosophy) with the param name on any non-zero exit.
 ssm_get() {
-    aws ssm get-parameter --region "${REGION}" --name "/gitd/$1" --with-decryption \
-        --query Parameter.Value --output text
+    local name="$1"
+    local out
+    out="$(aws ssm get-parameter --region "${REGION}" --name "/gitd/${name}" --with-decryption \
+        --query Parameter.Value --output text)" || die "ssm_get failed for /gitd/${name}"
+    printf '%s\n' "${out}"
 }
 
 # --- early exit: all required inputs present -----------------------------------
@@ -78,6 +88,9 @@ case "${ARCH}" in
     *) die "unsupported architecture: ${ARCH}" ;;
 esac
 
+echo "gitd: userdata: env checks + arch resolution OK (${ARTIFACT_ARCH})"
+
+echo "gitd: userdata: discovering EIP from IMDSv2"
 # --- discover the EIP from IMDSv2 (no CFN pass-through needed) ------------------
 IMDS_TOKEN="$(curl -fsS -X PUT "http://169.254.169.254/latest/api/token" \
     -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")"
@@ -119,6 +132,7 @@ for bin in containerd ctr containerd-shim-runc-v2 runc; do
     [[ -x "/usr/local/bin/${bin}" ]] || die "host binary ${bin} not installed"
 done
 
+echo "gitd: userdata: host binaries installed; starting containerd"
 # Own systemd unit + config.toml (from tools/dist/containerd/, packaged by deploy.sh).
 [[ -f "${BUNDLE_DIR}/containerd.service" ]] || die "containerd.service missing from bundle"
 [[ -f "${BUNDLE_DIR}/config.toml" ]] || die "config.toml missing from bundle"
@@ -155,6 +169,7 @@ sed -e "s/<EIP injected at deploy>/${EIP}/g" "${BUNDLE_DIR}/gitd.yaml" > /etc/gi
 [[ -f "${BUNDLE_DIR}/webhooks.yaml" ]] || die "webhooks.yaml missing from bundle"
 cp "${BUNDLE_DIR}/webhooks.yaml" /etc/gitd/webhooks.yaml
 
+echo "gitd: userdata: pulling SSH/TLS material from SSM"
 # --- SSH material from SSM (R3-Q3) + sshd_config + auth_principals + revoked_keys --
 # Host key + cert (Ed25519 only, R13-Q3) -> /etc/gitd (overlaid onto /etc/ssh
 # in the sshd container).
@@ -250,6 +265,7 @@ chmod -R 0644 /etc/gitd/auth_principals
 chown root:root /etc/gitd/revoked_keys && chmod 0644 /etc/gitd/revoked_keys
 chmod 0700 /etc/gitd/tls
 
+echo "gitd: userdata: fetching/verifying/importing OCI image"
 # --- fetch + verify + import the OCI image (R3-Q2) ---------------------------------
 # Primary: GitHub Releases; fallback: S3 (image/ prefix); final fallback: the
 # bundle copy. Whichever source wins, the image is GPG-verified against the
@@ -303,6 +319,7 @@ verify_sha256 "${IMAGE_SHA256}" "${IMAGE_TAR}"
 ctr images import "${IMAGE_TAR}" || die "ctr images import failed"
 ctr images ls | grep -q "git.cmposer.cc/gitd:latest" || die "image import did not register git.cmposer.cc/gitd:latest"
 
+echo "gitd: userdata: writing systemd units"
 # --- the three ctr systemd units + timer (R2-Q15, R5-Q4, R8-Q4, R12-Q5) ------------
 # image ref, per-unit cap sets, bind mounts, memory caps. All units:
 #   --rootfs-ro (R5-Q4), --host-resolv-conf + --host-hosts-file (DNS in a
@@ -464,6 +481,7 @@ REBOOT_TIMER_EOF
 systemctl daemon-reload
 systemctl enable --now gitd-reboot.timer
 
+echo "gitd: userdata: waiting for units + running liveness probe"
 # --- wait for units + liveness probe (R9-Q9) ----------------------------------------
 # Liveness is the ssh greeting + an mTLS curl against :443 (no cert-less healthz).
 for _ in $(seq 1 30); do
