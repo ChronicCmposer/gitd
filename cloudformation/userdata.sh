@@ -425,7 +425,7 @@ if [[ "${containerd_ready}" -ne 1 ]]; then
 fi
 echo "gitd: userdata: containerd ready (${CONTAINERD_SOCK})"
 
-ctr images import "${IMAGE_TAR}" || die "ctr images import failed"
+ctr images import --ref git.cmposer.cc/gitd:latest "${IMAGE_TAR}" || die "ctr images import failed"
 ctr images ls | grep -q "git.cmposer.cc/gitd:latest" || die "image import did not register git.cmposer.cc/gitd:latest"
 
 echo "gitd: userdata: writing systemd units"

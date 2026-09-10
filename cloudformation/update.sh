@@ -260,7 +260,7 @@ ACTUAL=\$(sha256sum "\$TAR" | cut -d' ' -f1)
     exit 1
 }
 echo "gitd: update: sha256 verified: \$EXPECTED_SHA"
-ctr -n default images import "\$TAR"
+ctr -n default images import --ref ${IMAGE_REF} "\$TAR"
 ctr -n default images ls | grep -q '${IMAGE_REF}' || {
     echo "gitd: update: ERROR: import did not register ${IMAGE_REF}" >&2
     exit 1
