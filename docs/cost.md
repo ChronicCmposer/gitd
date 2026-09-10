@@ -3,7 +3,7 @@
 git.cmposer.cc runs at approximately **$4.50/month** in `us-east-2`. This is
 the standing cost model from the plan (Goal, decision table) and a note for
 budgeting; how your bill actually lands depends on the exact instance
-utilization and the EIP/S3 pennies.
+utilization and the S3 pennies.
 
 ## Breakdown
 
@@ -11,7 +11,6 @@ utilization and the EIP/S3 pennies.
 |------|------|--------------|
 | EC2 instance | `t4g.nano`, on-demand, `us-east-2` | ~$3.20 |
 | EBS root volume | 8 GB `gp3`, encrypted (default `aws/ebs` key, R4-Q7) | ~$0.6–0.7 |
-| Elastic IP | attached to the instance (EIP association, stack-managed) | **$0 when attached**; ~$3.60/mo if ever detached+unused |
 | S3 buckets | `git.cmposer.cc` — bundles under `repos/`, dist artifacts + image under `openssh/`/`git/`/`fish/`/`containerd/`/`image/`/`bundles/`; **pennies** at this volume | < $0.25 |
 | **Total** | | **~$4.50/mo** |
 
@@ -24,10 +23,10 @@ utilization and the EIP/S3 pennies.
   lightweight timers. Letting total resident container footprint exceed
   ~512MiB would be the main way this number moves (a pathological git index-pack
   OOMs rather than starving the host — that is the point of the caps).
-- **EIP is free while attached.** It is a pre-allocated allocation ID the stack
-  associates with the instance. The only EIP cost risk is leaving the
-  allocation **unattached** (e.g. after a rebuild that didn't re-associate)
-  — AWS bills ~$3.60/mo for detached public IPv4s. Keep it attached.
+- **No Elastic IP.** The instance uses an auto-assigned public IPv4
+  (`MapPublicIpOnLaunch: true`); there is no allocation to pay for and no
+  detached-IP charge risk. DDNS keeps `git.cmposer.cc` pointed at the current
+  address (Option B).
 - **S3 is "pennies" at this scale**: a handful of bundle objects/week under
   `repos/`, versioned (noncurrent versions expire in 30d, R12-Q9), plus the
   dist/image artifacts. Even with `AbortIncompleteMultipartUpload 7d` belt-and-
@@ -39,17 +38,17 @@ utilization and the EIP/S3 pennies.
 ## Tracking
 
 ```sh
-# Instance + IP cost driver (attached EIP is free; watch for a detach).
+# No EIP is used (Option B): the address pool should stay empty.
 aws ec2 describe-addresses --region us-east-2 \
-  --query 'Addresses[?AssociationId!=`null`]' --output table
+  --query 'Addresses' --output table
 
 # S3 bucket size (should stay small / pennies).
 aws s3 ls s3://git.cmposer.cc/ --recursive --region us-east-2 | awk '{s+=$3} END {printf "S3 bytes: %.1f MiB\n", s/1048576}'
 
 # The authoritative cost number is in Cost Explorer under
-# service:EC2-Other(gp3/EIP) + AmazonS3 for us-east-2.
+# service:EC2-Other(gp3) + AmazonS3 for us-east-2.
 ```
 
 Run `docs/verification.md` after any infra change (rebuild, update, CA rekey)
-and confirm the EIP is re-attached — that single check protects the least
-obvious line item.
+and confirm the public IP + DDNS record are current — that single check
+protects the least obvious line item.

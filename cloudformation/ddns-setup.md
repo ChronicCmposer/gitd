@@ -1,6 +1,6 @@
 # Namecheap Dynamic DNS — one-time setup (Phase 7.4)
 
-`git.cmposer.cc` is kept pointed at the instance EIP by the `gitd ddns`
+`git.cmposer.cc` is kept pointed at the instance's public IP by the `gitd ddns`
 subcommand (a `gitd-ddns` container timer running every 6h, per
 `gitd.yaml` `ddns.interval`). This is a one-time, manual setup that must
 happen before the first `cloudformation/deploy.sh` run.
@@ -39,10 +39,10 @@ IAM is needed. The value is never placed in the CloudFormation template
 
 ## 3. Verify
 
-After deploy, confirm the record resolves to the EIP:
+After deploy, confirm the record resolves to the instance's public IP:
 
 ```sh
-host git.cmposer.cc        # -> should return the EIP
+host git.cmposer.cc        # -> should return the public IP (Outputs.GitdPublicIp)
 ```
 
 and that the `gitd-ddns` unit can refresh it:
@@ -54,5 +54,6 @@ systemctl status gitd-ddns.service
 
 The `gitd ddns` subcommand hits
 `https://dynamicdns.park-your-domain.com/update?host=git&domain=cmposer.cc&password=...`
-with the `ip` parameter omitted (Namecheap uses the requester IP = the EIP).
+with the `ip` parameter omitted (Namecheap uses the requester IP = the
+instance's auto-assigned public IP).
 A "Good <ip>" reply is success; anything else fails loudly (fail-fast).

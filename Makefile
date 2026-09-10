@@ -141,7 +141,7 @@ image-container: ## Produce gitd-container.tar for `ctr images import` (R3-Q2).
 	bazel build //image:image
 	$(DIST)/package-image.sh
 
-deploy: ## Deploy the stack via CloudFormation (Phase 7). Usage: make deploy ARGS="--key-name KP --eip-allocation-id EIP"
+deploy: ## Deploy the stack via CloudFormation (Phase 7). Usage: make deploy ARGS="--key-name KP"
 	./cloudformation/deploy.sh $(ARGS)
 
 update: ## In-place update of a live server (Phase 8.1, R3-Q10/R6-Q3). Usage: make update ARGS="--sha256 <hex>"

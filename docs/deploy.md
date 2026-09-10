@@ -37,9 +37,6 @@ These must all be true before the first deploy:
   `AWS::EC2::KeyPair::KeyName` as the SSM-host-plane emergency key. It is not
   the gitd sshd path (that is the SSH CA), but CloudFormation requires a
   keypair on the launch template.
-- **A pre-allocated Elastic IP** in the region, and its allocation ID (passed
-  with `--eip-allocation-id`). The EIP is attached by the stack and is the
-  public address DDNS points `git.cmposer.cc` at.
 - **Namecheap Dynamic DNS set up** (Phase 7.4, `cloudformation/ddns-setup.md`):
   host `git`, domain `cmposer.cc`, and the DDNS password stored in SSM at
   `/gitd/ddns/password` (SecureString). Run this before the first deploy.
@@ -52,14 +49,13 @@ These must all be true before the first deploy:
 ## 2. Deploy
 
 ```sh
-# From the repo root. Required flags are --key-name and --eip-allocation-id.
+# From the repo root. The only required flag is --key-name.
 cloudformation/deploy.sh \
-  --key-name sd-experiment-key \
-  --eip-allocation-id eipalloc-XXXXXXXXXXXXXXXXX
+  --key-name sd-experiment-key
 ```
 
 `make deploy` is a thin facade:
-`make deploy ARGS="--key-name <kp> --eip-allocation-id <id>"`.
+`make deploy ARGS="--key-name <kp>"`.
 
 ### Flags
 
@@ -68,14 +64,13 @@ cloudformation/deploy.sh \
 | `--stack-name` | `gitd` | no | CloudFormation stack name |
 | `--region` | `us-east-2` | no | Region |
 | `--key-name` | — | **yes** | EC2 keypair name |
-| `--eip-allocation-id` | — | **yes** | Pre-allocated EIP allocation ID |
 | `--instance-type` | `t4g.nano` | no | Instance type (arm64) |
 | `--bucket` | `git.cmposer.cc` | no | S3 bucket (artifacts + repos + bundles) |
 | `--image-tar` | `tools/dist/out/gitd-container.tar` | no | OCI image tarball |
 | `--gitd-release-tag` | `gitd-container` | no | gitd-container family release tag on `ChronicCmposer/gitd` |
 | `--bundle-dir` | `cloudformation/out` | no | Bundle staging dir |
 
-`--key-name` and `--eip-allocation-id` are enforced with a fail-fast exit
+`--key-name` is enforced with a fail-fast exit
 before anything else runs.
 
 ### The deploy pipeline (order matters)
@@ -119,8 +114,9 @@ before anything else runs.
    `wait stack-update-complete`.
 
 The stack write is otherwise standard CloudFormation (self-contained VPC, SG
-22+443 open / egress 443-only, one t4g.nano AL2023 arm64 instance behind the
-EIP, versioned SSE-S3 bucket with 30d noncurrent + 7d multipart lifecycle).
+22+443 open / egress 443-only, one t4g.nano AL2023 arm64 instance with an
+auto-assigned public IP (DDNS-tracked), versioned SSE-S3 bucket with 30d
+noncurrent + 7d multipart lifecycle).
 
 ## 3. Artifact integrity + provenance flow
 
@@ -236,10 +232,10 @@ the browse UI over mTLS with the probe client cert. After the stack reaches
 - bundle present in S3 (`aws s3 ls s3://git.cmposer.cc/repos/<repo>/`).
 - browse over mTLS with the device cert.
 - webhook delivery (if a plugin target is configured).
-- DDNS: `host git.cmposer.cc` resolves to the EIP.
+- DDNS: `host git.cmposer.cc` resolves to the instance's public IP.
 
 The public IP is discoverable from the stack outputs (`GitdPublicIp`) and is
-the value the EIP association pins; DDNS keeps the hostname current.
+the auto-assigned address DDNS keeps `git.cmposer.cc` pointed at.
 
 ## 7. Notes and caveats
 

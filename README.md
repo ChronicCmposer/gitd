@@ -27,7 +27,8 @@ journalctl). See [admin-split](docs/admin-split.md).
 
 - One self-contained VPC/stack: `cloudformation/stack.yaml` creates the VPC, SG
   (22 + 443 in, 443-only egress), versioned SSE-S3 bucket, IAM instance role,
-  a `t4g.nano` behind an EIP; `cloudformation/userdata.sh` boots it from a
+  a `t4g.nano` with an auto-assigned public IP (DDNS keeps `git.cmposer.cc`
+  pointed at it); `cloudformation/userdata.sh` boots it from a
   sha256-pinned deployment bundle.
 - A **from-scratch OCI image** (rules_oci) holds `sshd` + `git` + `fish` +
   `sudo` + `ca-certificates` + `gitd`; three `ctr run --rm --net-host` systemd
@@ -95,7 +96,7 @@ make check-openssh-dist check-git-dist ...   # build-twice determinism gates
 make gen-dist-pins                           # regenerate //:dist_pins.bzl
 make publish-openssh-dist publish-git-dist ... # GitHub-first, S3-fallback publish
 make image-container                         # gitd-container.tar for ctr images import
-make deploy ARGS="--key-name KP --eip-allocation-id EIP"   # CloudFormation deploy
+make deploy ARGS="--key-name KP"   # CloudFormation deploy
 ```
 
 ### Versioning & releases (R1-Q11/Q14)
@@ -196,8 +197,9 @@ Exit codes: `0` ok, `1` runtime, `2` usage; errors to stderr as
 `configs/gitd.yaml` + `configs/webhooks.yaml` are the *example/authoritative
 target* configs (matching the plan's Config Schemas appendix). `deploy.sh`
 packages them into the deployment bundle and `userdata.sh` writes them
-verbatim to `/etc/gitd` at first boot (EIP placeholder substituted into
-`host_allowlist`). **After first boot the host copies are authoritative** —
+verbatim to `/etc/gitd` at first boot (the `host_allowlist` placeholder is
+substituted with the instance's auto-assigned public IP). **After first boot
+the host copies are authoritative** —
 runtime edits are host-plane file edits + `ctr task kill --signal SIGHUP
 gitd-serve` (fail-safe reload).
 

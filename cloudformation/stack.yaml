@@ -2,7 +2,8 @@
 #
 # Self-contained CloudFormation template (opencode-proxy style): VPC, SG,
 # S3 bucket, IAM instance role, and a single t4g.nano AL2023 arm64 instance
-# behind an EIP, all created fresh by this stack. The instance boots via a
+# with an auto-assigned public IP (DDNS keeps git.cmposer.cc pointed at it),
+# all created fresh by this stack. The instance boots via a
 # minimal bootstrap (below) that pulls the gitd deployment bundle from S3 and
 # runs the full boot script (cloudformation/userdata.sh) packaged inside it.
 #
@@ -34,9 +35,6 @@ Parameters:
     Type: String
     Default: t4g.nano
     AllowedValues: [t4g.nano, t4g.micro]
-  EipAllocationId:
-    Description: Pre-allocated Elastic IP allocation ID (the git.cmposer.cc public IP)
-    Type: String
 
   # --- deployment bundle (built + uploaded by cloudformation/deploy.sh) --------
   BucketName:
@@ -112,7 +110,7 @@ Resources:
         Fn::Select:
           - 0
           - Fn::GetAZs: !Ref "AWS::Region"
-      MapPublicIpOnLaunch: false   # the EIP provides the public address
+      MapPublicIpOnLaunch: true    # auto-assign a public IP; DDNS tracks it
       Tags:
         - Key: Name
           Value: gitd-subnet
@@ -344,19 +342,12 @@ Resources:
         - Key: gitd:revision
           Value: !Ref RepoRefSha
 
-  # --- the Elastic IP (pre-allocated) + association ---------------------------------
-  GitdEipAssociation:
-    Type: AWS::EC2::EIPAssociation
-    Properties:
-      AllocationId: !Ref EipAllocationId
-      InstanceId: !Ref GitdInstance
-
 Outputs:
   GitdInstanceId:
     Description: gitd server instance ID
     Value: !Ref GitdInstance
   GitdPublicIp:
-    Description: git.cmposer.cc public IP (the EIP)
+    Description: the current auto-assigned public IP; DDNS keeps git.cmposer.cc pointed at it
     Value: !Select [0, !Split ["/", !GetAtt GitdInstance.PublicIp]]
   GitdBucket:
     Description: S3 bucket

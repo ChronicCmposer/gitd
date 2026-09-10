@@ -80,7 +80,7 @@ shell) → `{repo, bundles:[...]}` (R13-Q6).
 ## 4. Browse over mTLS
 
 The browse UI is `:443`, **require-and-verify client cert**, TLS 1.3 only
-(R4-Q8), Host header allowlist of `git.cmposer.cc` (+ EIP + localhost, R8-Q5).
+(R4-Q8), Host header allowlist of `git.cmposer.cc` (+ public IP + localhost, R8-Q5).
 With the device cert and the TLS CA as `--cacert`:
 
 ```sh
@@ -120,11 +120,11 @@ Requires at least one plugin configured. Two ways to assert delivery:
 
 ## 6. DDNS update
 
-Namecheap resolves `git.cmposer.cc` to the instance EIP:
+Namecheap resolves `git.cmposer.cc` to the instance's public IP:
 
 ```sh
 host git.cmposer.cc
-# should return the stack's EIP (Outputs.GitdPublicIp)
+# should return the stack's public IP (Outputs.GitdPublicIp)
 ```
 
 The `gitd-ddns` container timer refreshes the record every 6h, per
@@ -140,7 +140,7 @@ journalctl -u gitd-ddns.service | tail    # "ddns updated ... Good <ip>"
 ```
 
 A stale record (> ~30d with no refresh) breaks `ssh git@git.cmposer.cc` and
-browse — remember direct-EIP is **not** supported (host cert principal +
+browse — remember direct-IP is **not** supported (host cert principal +
 Host allowlist both reject it, R10-Q10), so if DNS is stale everything seems
 down at once and the fix is the DDNS timer, not a workaround.
 

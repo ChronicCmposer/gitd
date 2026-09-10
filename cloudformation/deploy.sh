@@ -12,13 +12,12 @@
 # boot. This script guarantees that ordering.
 #
 # Usage:
-#   cloudformation/deploy.sh --key-name <kp> --eip-allocation-id <alloc-id> [opts]
+#   cloudformation/deploy.sh --key-name <kp> [opts]
 #
 # Options:
 #   --stack-name <name>          stack name (default gitd)
 #   --region <region>            default us-east-2
 #   --key-name <kp>              EC2 keypair (required)
-#   --eip-allocation-id <id>     pre-allocated EIP allocation ID (required)
 #   --instance-type <type>       default t4g.nano
 #   --bucket <bucket>            default git.cmposer.cc
 #   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
@@ -35,7 +34,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STACK_NAME="gitd"
 REGION="us-east-2"
 KEY_NAME=""
-EIP_ALLOCATION_ID=""
 INSTANCE_TYPE="t4g.nano"
 BUCKET="git.cmposer.cc"
 IMAGE_TAR="${REPO_ROOT}/tools/dist/out/gitd-container.tar"
@@ -61,7 +59,6 @@ while [[ $# -gt 0 ]]; do
         --stack-name)        STACK_NAME="${2:?missing value}"; shift 2 ;;
         --region)            REGION="${2:?missing value}"; shift 2 ;;
         --key-name)          KEY_NAME="${2:?missing value}"; shift 2 ;;
-        --eip-allocation-id) EIP_ALLOCATION_ID="${2:?missing value}"; shift 2 ;;
         --instance-type)     INSTANCE_TYPE="${2:?missing value}"; shift 2 ;;
         --bucket)            BUCKET="${2:?missing value}"; shift 2 ;;
         --image-tar)         IMAGE_TAR="${2:?missing value}"; shift 2 ;;
@@ -72,13 +69,12 @@ while [[ $# -gt 0 ]]; do
 deploy.sh — build the deployment bundle + deploy the gitd CloudFormation stack.
 
 Usage:
-  cloudformation/deploy.sh --key-name <kp> --eip-allocation-id <alloc-id> [opts]
+  cloudformation/deploy.sh --key-name <kp> [opts]
 
 Options:
   --stack-name <name>          stack name (default gitd)
   --region <region>            default us-east-2
   --key-name <kp>              EC2 keypair (required)
-  --eip-allocation-id <id>     pre-allocated EIP allocation ID (required)
   --instance-type <type>       default t4g.nano
   --bucket <bucket>            default git.cmposer.cc
   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
@@ -95,7 +91,6 @@ done
 
 # --- early exit: required inputs (fail-fast, code-philosophy) --------------------
 [[ -n "${KEY_NAME}" ]] || die "--key-name is required"
-[[ -n "${EIP_ALLOCATION_ID}" ]] || die "--eip-allocation-id is required"
 
 require_cmd aws
 require_cmd sha256sum
@@ -192,7 +187,6 @@ echo "gitd: deploy: image published to ${DIST_REPO}@${GITD_RELEASE_TAG} + s3://$
 # --- create or update the stack ---------------------------------------------------------
 PARAMS=(
     "ParameterKey=KeyName,ParameterValue=${KEY_NAME}"
-    "ParameterKey=EipAllocationId,ParameterValue=${EIP_ALLOCATION_ID}"
     "ParameterKey=InstanceType,ParameterValue=${INSTANCE_TYPE}"
     "ParameterKey=BucketName,ParameterValue=${BUCKET}"
     "ParameterKey=BundleS3Key,ParameterValue=${BUNDLE_S3_KEY}"
