@@ -146,19 +146,64 @@ systemctl enable --now containerd.service
 # uids match the image (R2-Q15/R7-Q3): git 1001, admin 1000. The admin's real
 # shell lives inside the container; the host account exists only to own
 # /home/admin (a bind-mount target) with a matching uid.
+# On AL2023 the default `ec2-user` owns uid/gid 1000, which collides with the
+# image contract (admin must own uid/gid 1000). This is a headless git server
+# that shells in as admin, so ec2-user is reassigned to a free uid/gid and
+# admin takes 1000. ANY other owner of uid 1000 is an unexpected conflict:
+# fail loud (code-philosophy) — silently proceeding would orphan /home/admin.
+#
 # GID/UID guards are NUMERIC (getent group <gid> / getent passwd <uid>), not
-# by name: on AL2023 the gid 1000/1001 may already exist under a DIFFERENT
-# group name (getent group admin would be empty -> groupadd -g 1000 admin
-# aborts with "GID already exists"). The contract (R2-Q15/R7-Q3) only requires
-# uid/gid admin=1000 and uid/gid git=1001 to exist and be the user's primary
-# gid; the owning group NAME is irrelevant. So guard by numeric gid/uid and let
-# useradd -g <gid> reference whatever group already owns that gid.
-if ! getent group 1000 >/dev/null; then groupadd -g 1000 admin; fi
+# by name (see commit 81b8c11): on AL2023 gid 1000/1001 may already exist under
+# a DIFFERENT group name, and the contract only requires uid/gid admin=1000 and
+# uid/gid git=1001 to exist as the user's primary gid — the owning group NAME is
+# irrelevant. So guard by numeric gid/uid and let useradd -g <gid> reference
+# whatever group already owns that gid.
+
+# find_free_id <getent-db> <start-id> — smallest id >= start absent from the db.
+find_free_id() {
+    local db="$1" id="$2"
+    while getent "${db}" "${id}" >/dev/null 2>&1; do
+        id=$((id + 1))
+    done
+    printf '%s\n' "${id}"
+}
+
+uid_1000_owner="$(getent passwd 1000 2>/dev/null | cut -d: -f1 || true)"
+gid_1000_group="$(getent group 1000 2>/dev/null | cut -d: -f1 || true)"
+
+if [[ -n "${uid_1000_owner}" && "${uid_1000_owner}" != "admin" ]]; then
+    if [[ "${uid_1000_owner}" == "ec2-user" ]]; then
+        # Reclaim uid 1000 from ec2-user: reassign it (and, if its primary group
+        # also holds gid 1000, that group too) to a free id so BOTH uid 1000 and
+        # gid 1000 free up for admin. Start the search at 1002: uid/gid 1001 is
+        # reserved for `git` below, so ec2-user must never land there.
+        ec2_new_uid="$(find_free_id passwd 1002)"
+        if [[ "${gid_1000_group}" == "ec2-user" ]]; then
+            ec2_new_gid="$(find_free_id group 1002)"
+            # groupmod before usermod keeps the moved group consistent with the
+            # user's primary-gid reference; neither is locked or in use on a
+            # fresh boot (no ec2-user sessions exist).
+            groupmod -g "${ec2_new_gid}" ec2-user
+            echo "gitd: userdata: reassigned ec2-user group gid 1000 -> ${ec2_new_gid}"
+        fi
+        usermod -u "${ec2_new_uid}" ec2-user
+        echo "gitd: userdata: reassigned ec2-user uid 1000 -> ${ec2_new_uid}"
+    else
+        die "uid 1000 is owned by '${uid_1000_owner}' (not ec2-user or admin); refusing to proceed"
+    fi
+fi
+
+# uid 1000 is now free unless admin already owns it. Ensure a group holds gid
+# 1000 for admin's primary gid (recreate it if ec2-user's move freed it, or if
+# it never existed).
+if ! getent group 1000 >/dev/null; then
+    groupadd -g 1000 admin
+fi
+
 if getent passwd 1000 >/dev/null; then
-    # uid 1000 already exists: it MUST be our admin account, else fail loud
-    # (code-philosophy) — silently proceeding would orphan /home/admin.
+    # uid 1000 is owned by admin (reclaimed above, or already present).
     if ! getent passwd admin >/dev/null; then
-        die "uid 1000 already exists under a different user; refusing to proceed"
+        die "uid 1000 is owned by a user other than admin; refusing to proceed"
     fi
 else
     if getent passwd admin >/dev/null; then
