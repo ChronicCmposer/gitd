@@ -402,6 +402,8 @@ containerd_timeout=60
 containerd_ready=0
 for _ in $(seq 1 "${containerd_timeout}"); do
     if [[ "$(systemctl is-active containerd 2>/dev/null || true)" == "failed" ]]; then
+        echo "gitd: userdata: ----- containerd journal (last 40) -----"
+        journalctl -u containerd --no-pager -n 40 2>/dev/null || echo "(no journal)"
         die "containerd.service failed to start; status: $(systemctl is-active containerd 2>/dev/null || true)"
     fi
     if [[ -S "${CONTAINERD_SOCK}" ]] && ctr --address "${CONTAINERD_SOCK}" version >/dev/null 2>&1; then
@@ -410,8 +412,17 @@ for _ in $(seq 1 "${containerd_timeout}"); do
     fi
     sleep 1
 done
-[[ "${containerd_ready}" -eq 1 ]] \
-    || die "containerd socket ${CONTAINERD_SOCK} did not become ready within ${containerd_timeout}s; status: $(systemctl is-active containerd 2>/dev/null || true)"
+if [[ "${containerd_ready}" -ne 1 ]]; then
+    echo "gitd: userdata: ----- containerd journal (last 40) -----"
+    journalctl -u containerd --no-pager -n 40 2>/dev/null || echo "(no journal)"
+    echo "gitd: userdata: ----- containerd status -----"
+    systemctl status containerd --no-pager 2>/dev/null || true
+    echo "gitd: userdata: ----- /run/containerd -----"
+    ls -la /run/containerd 2>/dev/null || echo "(dir missing)"
+    echo "gitd: userdata: ----- containerd procs -----"
+    ps aux | grep '[c]ontainerd' || echo "(no containerd proc)"
+    die "containerd socket ${CONTAINERD_SOCK} did not become ready within ${containerd_timeout}s; status: $(systemctl is-active containerd 2>/dev/null || true)"
+fi
 echo "gitd: userdata: containerd ready (${CONTAINERD_SOCK})"
 
 ctr images import "${IMAGE_TAR}" || die "ctr images import failed"
