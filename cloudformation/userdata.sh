@@ -516,6 +516,9 @@ Requires=containerd.service
 # /etc/gitd is overlaid onto BOTH /etc/gitd (gitd config for the ForceCommand
 # gateway) and /etc/ssh (sshd_config + host key + trusted CA + auth_principals +
 # revoked_keys), matching the image's baked paths.
+# /tmp tmpfs (mode 1777, like /run/sshd): runc's `ctr tasks exec` must write
+# /tmp/runc-process* even though the rootfs is --read-only; without it the
+# in-container diagnostics (sshd -t + trusted-CA fingerprint) cannot run.
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --read-only \
   --cap-drop CAP_DAC_OVERRIDE --cap-drop CAP_FSETID --cap-drop CAP_FOWNER \
@@ -532,6 +535,7 @@ ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
   --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
   --mount type=tmpfs,destination=/run/sshd,options=mode=1777 \
+  --mount type=tmpfs,destination=/tmp,options=mode=1777 \
   git.cmposer.cc/gitd:latest gitd-sshd /usr/local/sbin/sshd -D -f /etc/ssh/sshd_config -e
 Restart=always
 RestartSec=5
@@ -723,6 +727,13 @@ dump_sshd_diagnostics() {
     # the listener + journal probes above are authoritative.
     ctr -n default tasks exec --exec-id sshd-t gitd-sshd /usr/local/sbin/sshd -t -f /etc/ssh/sshd_config 2>&1 \
         || echo "(in-container sshd -t not available)"
+    echo "gitd: userdata: ----- in-container trusted CA fingerprint -----"
+    # Fingerprint the CA keys exactly as the container sshd trusts them: OpenSSH
+    # 10.5 ssh-keygen inside gitd-sshd against /etc/ssh/trusted_user_ca_keys.pem
+    # (the /etc/gitd overlay). Requires the /tmp tmpfs so runc exec can write its
+    # process file; guarded so a failure never masks the listener/journal probes.
+    ctr -n default tasks exec --exec-id sshd-ca gitd-sshd /usr/local/bin/ssh-keygen -lf /etc/ssh/trusted_user_ca_keys.pem 2>&1 \
+        || echo "(in-container ssh-keygen for trusted CA not available)"
 }
 fail_sshd_diagnostics() {
     dump_sshd_diagnostics
