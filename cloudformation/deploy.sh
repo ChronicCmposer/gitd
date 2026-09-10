@@ -5,7 +5,9 @@
 # into a deployment bundle, VERIFIES the already-signed gitd-container.tar
 # (signed + published by 'make release') against the pinned key, creates the
 # gitd-container family release on ChronicCmposer/gitd only if missing, pushes
-# the client-side certs to SSM, then creates/updates the CloudFormation stack.
+# the client-side certs to SSM, creates/updates the CloudFormation stack, then
+# tails the instance console output so boot diagnostics (SSH auth + CA
+# fingerprint checks) surface automatically.
 # Fail-fast and idempotent-ish (create if absent, update if present).
 #
 # Order matters (R3-Q2/R3-Q3): the bundle, image, and SSM certs must all exist
@@ -25,9 +27,12 @@
 #   --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
 #   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
 #   --debug                      shell trace + raw AWS create/update-stack output
+#   --no-console-tail            skip the post-deploy console-output tail
+#   --console-tail-seconds <N>   console tail duration in seconds (default 120)
 # Environment: the image release is assumed already signed + published by
 # 'make release' (Option B); deploy.sh VERIFIES it and needs gh CLI only when
-# the release is missing (create path).
+# the release is missing (create path). GITD_NO_CONSOLE_TAIL=1 also skips the
+# post-deploy console tail.
 
 set -euo pipefail
 
@@ -45,6 +50,8 @@ GITD_RELEASE_TAG="gitd-container"
 BUNDLE_DIR="${SCRIPT_DIR}/out"
 DIST_REPO="ChronicCmposer/gitd"
 DEBUG_FLAG=0
+CONSOLE_TAIL_FLAG=0
+CONSOLE_TAIL_SECONDS=120
 
 die() {
     echo "gitd: deploy: $*" >&2
@@ -70,6 +77,8 @@ while [[ $# -gt 0 ]]; do
         --gitd-release-tag)  GITD_RELEASE_TAG="${2:?missing value}"; shift 2 ;;
         --bundle-dir)        BUNDLE_DIR="${2:?missing value}"; shift 2 ;;
         --debug)             DEBUG_FLAG=1; shift ;;
+        --no-console-tail)       CONSOLE_TAIL_FLAG=1; shift ;;
+        --console-tail-seconds)  CONSOLE_TAIL_SECONDS="${2:?missing value}"; shift 2 ;;
         -h|--help)
             cat <<'HELP'
 deploy.sh — build the deployment bundle + deploy the gitd CloudFormation stack.
@@ -87,10 +96,13 @@ Options:
   --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
   --debug                      shell trace + raw AWS create/update-stack output
+  --no-console-tail            skip the post-deploy console-output tail
+  --console-tail-seconds <N>   console tail duration in seconds (default 120)
 
 Environment: the image is assumed already signed + published by 'make release'
 (Option B); deploy.sh VERIFIES it against the pinned key and only creates the
 gitd-container release on ChronicCmposer/gitd if missing (gh CLI then required).
+GITD_NO_CONSOLE_TAIL=1 also skips the post-deploy console tail.
 HELP
             exit 0
             ;;
@@ -113,6 +125,18 @@ if [[ "${DEBUG}" == "1" ]]; then
     set -x
 fi
 
+# --- console-tail control -----------------------------------------------------------
+# GITD_NO_CONSOLE_TAIL env (1/true/yes) or --no-console-tail both disable the
+# post-deploy console tail. Normalize to a single trusted 0/1 so the step below
+# branches on one value (parse, don't validate).
+case "${GITD_NO_CONSOLE_TAIL:-}" in
+    1|true|yes) CONSOLE_TAIL=0 ;;
+    *)           CONSOLE_TAIL=1 ;;
+esac
+if [[ "${CONSOLE_TAIL_FLAG}" == "1" ]]; then
+    CONSOLE_TAIL=0
+fi
+
 # Emit the AWS CLI --debug flag so the raw HTTPS request/response (which carries
 # the full validation-error list) reaches the terminal. No-op when DEBUG is off,
 # keeping the default behavior byte-identical.
@@ -122,8 +146,92 @@ cfn_debug() {
     fi
 }
 
+# --- console tail helpers ------------------------------------------------------------
+# Resolve the gitd instance ID: prefer the stack's GitdInstanceId output
+# (declared in stack.yaml), else the running instance tagged with this stack.
+# Prints the ID or nothing; NEVER fails the deploy (callers handle empty).
+resolve_instance_id() {
+    local instance_id
+
+    instance_id="$(
+        aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${REGION}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`GitdInstanceId`].OutputValue' \
+            --output text 2>/dev/null || true
+    )"
+    if [[ -n "${instance_id}" ]]; then
+        echo "${instance_id}"
+        return
+    fi
+
+    instance_id="$(
+        aws ec2 describe-instances --region "${REGION}" \
+            --filters Name=tag:aws:cloudformation:stack-name,Values="${STACK_NAME}" \
+                      Name=instance-state-name,Values=running \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --output text 2>/dev/null || true
+    )"
+    # Multiple matches (shouldn't happen) — take the first ID.
+    echo "${instance_id}" | awk 'NR==1 {print $1}'
+}
+
+# Tail the instance system log until the boot-complete marker ('boot complete',
+# the userdata.sh success line) appears or the duration elapses. Prints only NEW
+# lines per poll. This diagnostic step NEVER fails the deploy: a missing base64
+# skips the step and transient get-console-output failures are noted + retried.
+tail_console_output() {
+    local instance_id="$1"
+    local seconds="$2"
+    local marker="boot complete"
+    local poll_seconds=5
+    local seen=$'\n'
+    local output=""
+    local line=""
+    local elapsed=0
+    local booted=0
+
+    # Guard: decoding needs base64; skip (don't fail) the step when absent.
+    if ! command -v base64 >/dev/null 2>&1; then
+        echo "gitd: deploy: [console] base64 not found; skipping console tail"
+        return 0
+    fi
+
+    echo "gitd: deploy: [console] tailing system log for instance ${instance_id} (up to ${seconds}s)"
+    while (( elapsed < seconds )); do
+        # First poll prints the most recent buffered output (everything is new);
+        # later polls print only lines not seen in a previous iteration.
+        if output="$(
+            aws ec2 get-console-output --instance-id "${instance_id}" --region "${REGION}" \
+                --latest --output text 2>/dev/null | base64 -d 2>/dev/null
+        )"; then
+            while IFS= read -r line; do
+                [[ -n "${line}" ]] || continue
+                if [[ "${seen}" == *$'\n'"${line}"$'\n'* ]]; then
+                    continue
+                fi
+                seen="${seen}${line}"$'\n'
+                echo "gitd: deploy: [console] ${line}"
+                if [[ "${line}" == *"${marker}"* ]]; then
+                    booted=1
+                fi
+            done <<< "${output}"
+            if [[ "${booted}" == "1" ]]; then
+                echo "gitd: deploy: [console] boot complete; stopping tail"
+                return 0
+            fi
+        else
+            echo "gitd: deploy: [console] get-console-output failed; retrying in ${poll_seconds}s"
+        fi
+        sleep "${poll_seconds}"
+        elapsed=$(( elapsed + poll_seconds ))
+    done
+    echo "gitd: deploy: [console] tail finished (${seconds}s elapsed; boot marker not seen)"
+}
+
 # --- early exit: required inputs (fail-fast, code-philosophy) --------------------
 [[ -n "${KEY_NAME}" ]] || die "--key-name is required"
+if [[ ! "${CONSOLE_TAIL_SECONDS}" =~ ^[0-9]+$ ]] || (( CONSOLE_TAIL_SECONDS <= 0 )); then
+    die "--console-tail-seconds must be a positive integer (got '${CONSOLE_TAIL_SECONDS}')"
+fi
 
 require_cmd aws
 require_cmd sha256sum
@@ -281,6 +389,16 @@ else
     echo "gitd: deploy: stack create complete (boot signal received)"
     if [[ "${DEBUG}" == "1" ]]; then
         echo "gitd: deploy: (DEBUG) if the waiter reports a failure, run: aws cloudformation describe-stack-events --stack-name ${STACK_NAME} --region ${REGION} --query 'StackEvents[?ResourceStatus==\`CREATE_FAILED\`].{Res:LogicalResourceId,Reason:ResourceStatusReason}'"
+    fi
+fi
+
+# --- post-deploy: tail the instance system log for boot diagnostics -----------------
+if [[ "${CONSOLE_TAIL}" == "1" ]]; then
+    INSTANCE_ID="$(resolve_instance_id)"
+    if [[ -n "${INSTANCE_ID}" ]]; then
+        tail_console_output "${INSTANCE_ID}" "${CONSOLE_TAIL_SECONDS}"
+    else
+        echo "gitd: deploy: no running instance found for stack '${STACK_NAME}'; skipping console tail"
     fi
 fi
 
