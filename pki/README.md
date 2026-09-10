@@ -20,7 +20,7 @@ Cert lifetimes (plan decision table): **TLS server 90d, client 30d, CA 10y**.
 | File | Purpose |
 |------|---------|
 | `pki-new.sh` | One-shot bootstrap: TLS CA (10y) + server (90d) + client (30d) certs + CRL. |
-| `issue-device-cert.sh` | Repeatable per-device TLS client cert (30d) under `~/.ssh/gitd-device-certs/`. |
+| `issue-device-cert.sh` | Repeatable per-device TLS client cert (30d) + Apple `.mobileconfig` under `~/.ssh/gitd-device-certs/`. |
 | `renew-server-cert.sh` | Client-side server-cert renewal (90d) + push to SSM (R12-Q6). |
 | `gitd-cert-sync.sh` | **Host-side** (Phase 7): pull SSM `/gitd/server/*` → `/etc/gitd/tls/` (root, hourly). |
 | `lib.sh` | Shared fail-fast helpers. |
@@ -74,19 +74,31 @@ Each browser/device that must talk to browse over mTLS gets its own client cert.
 Run the helper (repeatable per device) against the local TLS CA:
 
 ```
-pki/issue-device-cert.sh macbook                  # key + CSR + cert only
-pki/issue-device-cert.sh macbook --p12-pass '...' # also build a .p12 for macOS Keychain
+pki/issue-device-cert.sh macbook
 ```
 
 It emits, for the named device:
 
 ```
 ~/.ssh/gitd-device-certs/<device>/
-  <device>.key        ECDSA P-256 private key (0600)
-  <device>.csr        certificate signing request
-  <device>.crt        client cert (30d, CN=<device>, O=gitd, OU=device)
-  <device>.p12        [optional] PKCS#12 for macOS Keychain import
+  <device>.key            ECDSA P-256 private key (0600)
+  <device>.csr            certificate signing request
+  <device>.crt            client cert (30d, CN=<device>, O=gitd, OU=device)
+  <device>.mobileconfig   Apple profile: CA trust + device identity (0600)
 ```
+
+The `.mobileconfig` bundles the TLS CA (the client trust pool) and the device
+identity (a PKCS#12) into a single install. The p12 is built from the freshly
+issued cert with the maximally-compatible `PBE-SHA1-3DES`/`sha1` MAC options so
+Apple's `SecKeychainItemImport` accepts it; its password is **auto-generated and
+never written to a sidecar file** — it lives only in the shell and inside the
+`.mobileconfig`. The intermediate `<device>.p12` is an input to the profile, not
+a deliverable, so it is **shredded on exit**; only the key, cert, and
+`.mobileconfig` remain.
+
+**Treat the `.mobileconfig` itself as a secret** — Apple's profile format stores
+the p12 password in plaintext inside it. AirDrop it to the device, install, then
+delete it.
 
 The cert is signed with the CA's `device_ext` (clientAuth EKU), then verified to
 chain to `tls-ca.crt`. Device certs live under `~/.ssh/gitd-device-certs/`
