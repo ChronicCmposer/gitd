@@ -391,6 +391,29 @@ rm -f "${IMAGE_TAR}.dl" "${IMAGE_TAR}.asc.dl"
 # Order: GPG provenance first, then the pinned sha256, then import.
 verify_artifact "${IMAGE_TAR}" "${GPG_KEY_PIN}"
 verify_sha256 "${IMAGE_SHA256}" "${IMAGE_TAR}"
+
+# Wait for containerd readiness before importing (R3-Q2): `systemctl enable --now`
+# returns once systemd has accepted the unit, but containerd may not have created
+# /run/containerd/containerd.sock yet — ctr would fail with "no such file or
+# directory". Poll up to 60s for the socket + `ctr version`; a failed unit dies
+# immediately (fail-fast, fail-loud) instead of burning the full timeout.
+CONTAINERD_SOCK="/run/containerd/containerd.sock"
+containerd_timeout=60
+containerd_ready=0
+for _ in $(seq 1 "${containerd_timeout}"); do
+    if [[ "$(systemctl is-active containerd 2>/dev/null || true)" == "failed" ]]; then
+        die "containerd.service failed to start; status: $(systemctl is-active containerd 2>/dev/null || true)"
+    fi
+    if [[ -S "${CONTAINERD_SOCK}" ]] && ctr --address "${CONTAINERD_SOCK}" version >/dev/null 2>&1; then
+        containerd_ready=1
+        break
+    fi
+    sleep 1
+done
+[[ "${containerd_ready}" -eq 1 ]] \
+    || die "containerd socket ${CONTAINERD_SOCK} did not become ready within ${containerd_timeout}s; status: $(systemctl is-active containerd 2>/dev/null || true)"
+echo "gitd: userdata: containerd ready (${CONTAINERD_SOCK})"
+
 ctr images import "${IMAGE_TAR}" || die "ctr images import failed"
 ctr images ls | grep -q "git.cmposer.cc/gitd:latest" || die "image import did not register git.cmposer.cc/gitd:latest"
 
