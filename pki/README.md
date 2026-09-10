@@ -20,6 +20,7 @@ Cert lifetimes (plan decision table): **TLS server 90d, client 30d, CA 10y**.
 | File | Purpose |
 |------|---------|
 | `pki-new.sh` | One-shot bootstrap: TLS CA (10y) + server (90d) + client (30d) certs + CRL. |
+| `issue-device-cert.sh` | Repeatable per-device TLS client cert (30d) under `~/.ssh/gitd-device-certs/`. |
 | `renew-server-cert.sh` | Client-side server-cert renewal (90d) + push to SSM (R12-Q6). |
 | `gitd-cert-sync.sh` | **Host-side** (Phase 7): pull SSM `/gitd/server/*` → `/etc/gitd/tls/` (root, hourly). |
 | `lib.sh` | Shared fail-fast helpers. |
@@ -66,6 +67,35 @@ the `tls:` block in `configs/gitd.yaml`.
 pki/pki-new.sh                      # generate CA + server + client + CRL
 cloudformation/upload-certs.sh      # push /gitd/server/* + /gitd/host/* to SSM
 ```
+
+## Issuing a device cert
+
+Each browser/device that must talk to browse over mTLS gets its own client cert.
+Run the helper (repeatable per device) against the local TLS CA:
+
+```
+pki/issue-device-cert.sh macbook                  # key + CSR + cert only
+pki/issue-device-cert.sh macbook --p12-pass '...' # also build a .p12 for macOS Keychain
+```
+
+It emits, for the named device:
+
+```
+~/.ssh/gitd-device-certs/<device>/
+  <device>.key        ECDSA P-256 private key (0600)
+  <device>.csr        certificate signing request
+  <device>.crt        client cert (30d, CN=<device>, O=gitd, OU=device)
+  <device>.p12        [optional] PKCS#12 for macOS Keychain import
+```
+
+The cert is signed with the CA's `device_ext` (clientAuth EKU), then verified to
+chain to `tls-ca.crt`. Device certs live under `~/.ssh/gitd-device-certs/`
+(outside the committed `pki/` tree, which is the server upload set) and are
+gitignored with the CA.
+
+The browse server's client-CA trust pool **is `tls-ca.crt`**, so a freshly
+issued device cert is accepted with **no server-side change**. To revoke a
+device, reissue the CRL from the CA and push `/gitd/server/revoked.crl`.
 
 ## Renewal flow (R12-Q6)
 
