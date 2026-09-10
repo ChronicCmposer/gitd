@@ -1,9 +1,9 @@
 # gitd — git.cmposer.cc
 
-A minimal, single-user **personal git server on AWS** (`t4g.nano`, AL2023 arm64,
+A minimal, single-user **personal git server on AWS** (`t4g.micro`, AL2023 arm64,
 `us-east-2`), focused on post-quantum transport, durable S3 mirroring, an
 mTLS-gated browse UI, and a small webhook plugin architecture — deployed via
-CloudFormation at **~$4.50/month** ([cost model](docs/cost.md)).
+CloudFormation at **~$7/month** ([cost model](docs/cost.md)).
 
 It is the implementation of `plans/git.cmposer.cc.md` (that plan is gitignored /
 internal). Module path `github.com/ChronicCmposer/gitd`, Go 1.26.x, Bazel
@@ -27,7 +27,7 @@ journalctl). See [admin-split](docs/admin-split.md).
 
 - One self-contained VPC/stack: `cloudformation/stack.yaml` creates the VPC, SG
   (22 + 443 in, 443-only egress), versioned SSE-S3 bucket, IAM instance role,
-  a `t4g.nano` with an auto-assigned public IP (DDNS keeps `git.cmposer.cc`
+  a `t4g.micro` with an auto-assigned public IP (DDNS keeps `git.cmposer.cc`
   pointed at it); `cloudformation/userdata.sh` boots it from a
   sha256-pinned deployment bundle.
 - A **from-scratch OCI image** (rules_oci) holds `sshd` + `git` + `fish` +
@@ -190,7 +190,7 @@ Exit codes: `0` ok, `1` runtime, `2` usage; errors to stderr as
 | [ca-loss-recovery](docs/ca-loss-recovery.md) | new CA + reissue + SSM + `@cert-authority` cutover |
 | [quantum-threat-model](docs/quantum-threat-model.md) | hybrid-PQC kex vs classical signatures, revisit triggers |
 | [verification](docs/verification.md) | end-to-end probes (ssh greeting + mTLS curl only) |
-| [cost](docs/cost.md) | ~$4.50/mo breakdown |
+| [cost](docs/cost.md) | ~$7/mo breakdown |
 
 ## Configuration provenance (R13-Q4)
 

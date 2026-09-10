@@ -19,7 +19,7 @@
 #   --stack-name <name>          stack name (default gitd)
 #   --region <region>            default us-east-2
 #   --key-name <kp>              EC2 keypair (required)
-#   --instance-type <type>       default t4g.nano
+#   --instance-type <type>       default t4g.micro
 #   --bucket <bucket>            default git.cmposer.cc
 #   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
 #   --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
@@ -38,7 +38,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STACK_NAME="gitd"
 REGION="us-east-2"
 KEY_NAME=""
-INSTANCE_TYPE="t4g.nano"
+INSTANCE_TYPE="t4g.micro"
 BUCKET="git.cmposer.cc"
 IMAGE_TAR="${REPO_ROOT}/tools/dist/out/gitd-container.tar"
 GITD_RELEASE_TAG="gitd-container"
@@ -81,7 +81,7 @@ Options:
   --stack-name <name>          stack name (default gitd)
   --region <region>            default us-east-2
   --key-name <kp>              EC2 keypair (required)
-  --instance-type <type>       default t4g.nano
+  --instance-type <type>       default t4g.micro
   --bucket <bucket>            default git.cmposer.cc
   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
   --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)

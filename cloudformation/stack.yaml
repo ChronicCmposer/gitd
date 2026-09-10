@@ -1,7 +1,7 @@
 # cloudformation/stack.yaml — git.cmposer.cc personal git server.
 #
 # Self-contained CloudFormation template (opencode-proxy style): VPC, SG,
-# S3 bucket, IAM instance role, and a single t4g.nano AL2023 arm64 instance
+# S3 bucket, IAM instance role, and a single t4g.micro AL2023 arm64 instance
 # with an auto-assigned public IP (DDNS keeps git.cmposer.cc pointed at it),
 # all created fresh by this stack. The instance boots via a
 # minimal bootstrap (below) that pulls the gitd deployment bundle from S3 and
@@ -19,7 +19,7 @@
 # report success/failure and unblock CREATE_COMPLETE.
 
 AWSTemplateFormatVersion: 2010-09-09
-Description: git.cmposer.cc personal git server (t4g.nano, AL2023 arm64, mTLS browse, PQC SSH)
+Description: git.cmposer.cc personal git server (t4g.micro, AL2023 arm64, mTLS browse, PQC SSH)
 
 Parameters:
   # --- instance ---------------------------------------------------------------
@@ -31,9 +31,9 @@ Parameters:
     Description: EC2 keypair for SSM-host-plane emergency access
     Type: AWS::EC2::KeyPair::KeyName
   InstanceType:
-    Description: Instance type (arm64; t4g.nano = 2 vCPU/512MiB, R8-Q4)
+    Description: Instance type (arm64; t4g.micro = 2 vCPU/1GiB, R8-Q4)
     Type: String
-    Default: t4g.nano
+    Default: t4g.micro
     AllowedValues: [t4g.nano, t4g.micro]
 
   # --- deployment bundle (built + uploaded by cloudformation/deploy.sh) --------

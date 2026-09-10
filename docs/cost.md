@@ -1,6 +1,6 @@
 # Monthly Cost Note (Phase 8.3)
 
-git.cmposer.cc runs at approximately **$4.50/month** in `us-east-2`. This is
+git.cmposer.cc runs at approximately **$7.00/month** in `us-east-2`. This is
 the standing cost model from the plan (Goal, decision table) and a note for
 budgeting; how your bill actually lands depends on the exact instance
 utilization and the S3 pennies.
@@ -9,20 +9,20 @@ utilization and the S3 pennies.
 
 | Item | Spec | Est. monthly |
 |------|------|--------------|
-| EC2 instance | `t4g.nano`, on-demand, `us-east-2` | ~$3.20 |
+| EC2 instance | `t4g.micro`, on-demand, `us-east-2` | ~$6.1 |
 | EBS root volume | 8 GB `gp3`, encrypted (default `aws/ebs` key, R4-Q7) | ~$0.6–0.7 |
 | S3 buckets | `git.cmposer.cc` — bundles under `repos/`, dist artifacts + image under `openssh/`/`git/`/`fish/`/`containerd/`/`image/`/`bundles/`; **pennies** at this volume | < $0.25 |
-| **Total** | | **~$4.50/mo** |
+| **Total** | | **~$7.00/mo** |
 
 ## Why each line is what it is
 
-- **`t4g.nano` on-demand** is the proven minimal sizing from the reference
-  projects (2 vCPU / 512MiB). Everything is tuned to fit that budget: the
-  per-container memory caps (sshd 320MiB / serve 128MiB / ddns 64MiB, R8-Q4),
-  `pack.threads 1` + `gc.auto 5000` (R8-Q9), and the `gitd-ddns`/`gitd-cert-sync`
-  lightweight timers. Letting total resident container footprint exceed
-  ~512MiB would be the main way this number moves (a pathological git index-pack
-  OOMs rather than starving the host — that is the point of the caps).
+- **`t4g.micro` on-demand** is the sizing that survives `dnf install aws-cli`
+  and later dnf transactions without OOM — `t4g.nano`'s 512MiB got oom-killed.
+  At 2 vCPU / 1GiB it still fits the per-container memory caps (sshd 320MiB /
+  serve 128MiB / ddns 64MiB, R8-Q4) with headroom. Letting total resident
+  container footprint exceed ~1GiB would be the main way this number moves (a
+  pathological git index-pack OOMs rather than starving the host — that is the
+  point of the caps).
 - **No Elastic IP.** The instance uses an auto-assigned public IPv4
   (`MapPublicIpOnLaunch: true`); there is no allocation to pay for and no
   detached-IP charge risk. DDNS keeps `git.cmposer.cc` pointed at the current

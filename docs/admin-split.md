@@ -134,6 +134,6 @@ shell; anything timed/systemd/host-OS → SSM.** Concretely:
 | Edit + reload configs | SSM → file edit + `ctr task kill --signal SIGHUP gitd-serve` |
 
 Remember the memory budget: `gitd-sshd` caps at 320MiB, `gitd-serve` 128MiB,
-`gitd-ddns` 64MiB on a 512MiB `t4g.nano` (R8-Q4). Keep host-plane dnf/fish
+`gitd-ddns` 64MiB on a 1GiB `t4g.micro` (R8-Q4). Keep host-plane dnf/fish
 activity light so a pathological git index-pack OOM fails cleanly instead of
 starving containerd — that bound is the point of the caps.

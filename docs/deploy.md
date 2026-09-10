@@ -70,7 +70,7 @@ cloudformation/deploy.sh \
 | `--stack-name` | `gitd` | no | CloudFormation stack name |
 | `--region` | `us-east-2` | no | Region |
 | `--key-name` | — | **yes** | EC2 keypair name |
-| `--instance-type` | `t4g.nano` | no | Instance type (arm64) |
+| `--instance-type` | `t4g.micro` | no | Instance type (arm64) |
 | `--bucket` | `git.cmposer.cc` | no | S3 bucket (artifacts + repos + bundles) |
 | `--image-tar` | `tools/dist/out/gitd-container.tar` | no | OCI image tarball |
 | `--gitd-release-tag` | `gitd-container` | no | gitd-container family release tag on `ChronicCmposer/gitd` |
@@ -124,7 +124,7 @@ before anything else runs.
    `wait stack-update-complete`.
 
 The stack write is otherwise standard CloudFormation (self-contained VPC, SG
-22+443 open / egress 443-only, one t4g.nano AL2023 arm64 instance with an
+22+443 open / egress 443-only, one t4g.micro AL2023 arm64 instance with an
 auto-assigned public IP (DDNS-tracked), versioned SSE-S3 bucket with 30d
 noncurrent + 7d multipart lifecycle).
 
@@ -225,8 +225,8 @@ INSTANCE_ID=$(aws cloudformation describe-stacks --stack-name gitd \
 aws ssm start-session --target "$INSTANCE_ID" --region us-east-2
 ```
 
-That drops you into a root shell on the host (a `t4g.nano` still needs its
-512MiB budget kept free, R8-Q4). From here you run `systemctl`, `journalctl`,
+That drops you into a root shell on the host (a `t4g.micro` still needs its
+1GiB budget kept free, R8-Q4). From here you run `systemctl`, `journalctl`,
 `ctr`, `dnf` — the host-plane operations. The container console
 (`ctr task attach` etc.) is generally **not** how you operate this stack; that
 is the container shell's job.
