@@ -438,6 +438,10 @@ echo "gitd: userdata: writing systemd units"
 #   a from-scratch image, R5-Q4), --net-host (share host netns, R6-Q7), --rm.
 # Flag syntax is containerd 2.x: --user UID:GID, --memory-limit <bytes>,
 # --mount type=bind,source=...,destination=...,options=rbind:ro.
+# Positionals are ctr run [flags] <image> <container-id> <command>...; each unit
+# passes a per-unit alphanumeric container-id (gitd-serve/gitd-sshd/gitd-ddns)
+# between the image ref and the command — without it the command is consumed as
+# the container-id and ctr rejects it with "container.ID ... must match".
 #
 # Capability flags (containerd 2.3.5, verified against the pinned ctr):
 #   * EVERY --cap-drop/--cap-add token must start with "CAP_" (run_unix.go
@@ -472,7 +476,7 @@ ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --mount type=bind,source=/etc/gitd,destination=/etc/gitd,options=rbind:ro \
   --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
   --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
-  git.cmposer.cc/gitd:latest /usr/local/bin/gitd serve --config /etc/gitd/gitd.yaml
+  git.cmposer.cc/gitd:latest gitd-serve /usr/local/bin/gitd serve --config /etc/gitd/gitd.yaml
 Restart=always
 RestartSec=5
 SERVE_EOF
@@ -502,7 +506,7 @@ ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --mount type=bind,source=/home/admin,destination=/home/admin,options=rbind:rw \
   --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
   --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
-  git.cmposer.cc/gitd:latest /usr/local/bin/sshd -D -f /etc/ssh/sshd_config -e
+  git.cmposer.cc/gitd:latest gitd-sshd /usr/local/bin/sshd -D -f /etc/ssh/sshd_config -e
 Restart=always
 RestartSec=5
 SSHD_SERVICE_EOF
@@ -527,7 +531,7 @@ ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --mount type=bind,source=/etc/gitd,destination=/etc/gitd,options=rbind:ro \
   --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
   --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
-  git.cmposer.cc/gitd:latest /usr/local/bin/gitd ddns --config /etc/gitd/gitd.yaml
+  git.cmposer.cc/gitd:latest gitd-ddns /usr/local/bin/gitd ddns --config /etc/gitd/gitd.yaml
 DDNS_SERVICE_EOF
 
 cat > /etc/systemd/system/gitd-ddns.timer <<'DDNS_TIMER_EOF'
