@@ -267,7 +267,7 @@ else
             --template-body "file://${SCRIPT_DIR}/stack.yaml" \
             --parameters "${PARAMS[@]}" \
             --capabilities CAPABILITY_IAM \
-            --region "${REGION}" --debug
+            --region "${REGION}" --on-failure DO_NOTHING --debug
     else
         aws cloudformation create-stack \
             --stack-name "${STACK_NAME}" \
