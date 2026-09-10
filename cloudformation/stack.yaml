@@ -253,6 +253,7 @@ Resources:
               #!/bin/bash
               set -euo pipefail
               exec >/var/log/gitd-userdata.log 2>&1
+              trap 'echo "gitd: bootstrap: ERROR at line \$LINENO (last command: \$BASH_COMMAND)" >&2' ERR
 
               # Minimal bootstrap: install AWS helpers, pull the deployment
               # bundle from S3, verify its sha256 (fail-fast, R3-Q2), then run
@@ -260,6 +261,7 @@ Resources:
               # aws-cfn-bootstrap ships in current AL2023 repos but not older AMIs;
               # fall back to the AWS-documented pip3 install from the
               # cloudformation-examples tarball and symlink it into /opt/aws/bin.
+              echo "gitd: bootstrap: installing aws-cli + cfn helpers"
               dnf install -y -q aws-cli
               if ! dnf install -y -q aws-cfn-bootstrap 2>/dev/null; then
                   dnf install -y -q python3-pip
@@ -270,13 +272,16 @@ Resources:
               fi
 
               mkdir -p /opt/gitd-bundle
+              echo "gitd: bootstrap: fetching deployment bundle from s3://${BucketName}/${BundleS3Key}"
               aws s3 cp "s3://${BucketName}/${BundleS3Key}" /opt/gitd-bundle/bundle.tar.gz \
                   --region ${AWS::Region} --only-show-errors
               echo "${BundleSha256}  /opt/gitd-bundle/bundle.tar.gz" \
                   | sha256sum -c - || { echo "gitd: bundle sha256 mismatch; aborting boot"; exit 1; }
+              echo "gitd: bootstrap: bundle sha256 OK; extracting"
               tar -xzf /opt/gitd-bundle/bundle.tar.gz -C /opt/gitd-bundle
               chmod +x /opt/gitd-bundle/userdata.sh
 
+              echo "gitd: bootstrap: running userdata.sh"
               STACK_NAME="${AWS::StackName}" \
               REGION="${AWS::Region}" \
               RESOURCE_NAME="GitdInstance" \
