@@ -75,7 +75,7 @@ to push a routine upgrade to a live server.
    GitHub is down.)
 5. **Import + swap.** With the verified image:
    ```sh
-   ctr -n default images import /opt/gitd-container.tar
+   ctr -n default images import --base-name git.cmposer.cc/gitd /opt/gitd-container.tar
    ctr -n default images ls | grep git.cmposer.cc/gitd:latest   # confirm registered
    systemctl restart gitd-sshd gitd-serve gitd-ddns.timer       # pick up the new image
    ```

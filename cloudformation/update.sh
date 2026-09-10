@@ -65,7 +65,8 @@ STACK_NAME="gitd"
 INSTANCE_ID=""
 GITD_RELEASE_TAG="gitd-container"
 DIST_REPO="ChronicCmposer/gitd"
-IMAGE_REF="git.cmposer.cc/gitd:latest"
+IMAGE_BASE="git.cmposer.cc/gitd"
+IMAGE_REF="${IMAGE_BASE}:latest"
 
 die() {
     echo "gitd: update: $*" >&2
@@ -260,7 +261,11 @@ ACTUAL=\$(sha256sum "\$TAR" | cut -d' ' -f1)
     exit 1
 }
 echo "gitd: update: sha256 verified: \$EXPECTED_SHA"
-ctr -n default images import --ref ${IMAGE_REF} "\$TAR"
+# --base-name (NOT --ref, which ctr images import does not have): the tar's
+# index.json carries the "latest" ref annotation baked by
+# tools/dist/package-image.sh, so the repo comes from the base name and the
+# tag from the annotation (git.cmposer.cc/gitd:latest).
+ctr -n default images import --base-name ${IMAGE_BASE} "\$TAR"
 ctr -n default images ls | grep -q '${IMAGE_REF}' || {
     echo "gitd: update: ERROR: import did not register ${IMAGE_REF}" >&2
     exit 1

@@ -202,7 +202,9 @@ Watch for the most common boot failures:
   rebuild + republish, re-run deploy so the pins update.
 - `ctr images import failed` or
   `image import did not register git.cmposer.cc/gitd:latest` → the image
-  tarball is not a valid OCI archive for this containerd.
+  tarball is not a valid OCI archive for this containerd, or it predates the
+  baked `org.opencontainers.image.ref.name` annotation in index.json
+  (added by `tools/dist/package-image.sh`); rebuild with `make image-container`.
 - `browse mTLS liveness probe failed` → TLS material in `/gitd/server/*` or
   `/gitd/probe/*` is stale/broken; run `upload-certs.sh` and redeploy.
 - `gitd-serve did not start` / `gitd-sshd did not start` → `journalctl -u

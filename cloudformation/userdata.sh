@@ -425,7 +425,10 @@ if [[ "${containerd_ready}" -ne 1 ]]; then
 fi
 echo "gitd: userdata: containerd ready (${CONTAINERD_SOCK})"
 
-ctr images import --ref git.cmposer.cc/gitd:latest "${IMAGE_TAR}" || die "ctr images import failed"
+# The OCI archive carries only the tag "latest" (baked into index.json as
+# org.opencontainers.image.ref.name by tools/dist/package-image.sh); the repo
+# comes from --base-name. --ref is not a ctr images import flag.
+ctr images import --base-name git.cmposer.cc/gitd "${IMAGE_TAR}" || die "ctr images import failed"
 ctr images ls | grep -q "git.cmposer.cc/gitd:latest" || die "image import did not register git.cmposer.cc/gitd:latest"
 
 echo "gitd: userdata: writing systemd units"
