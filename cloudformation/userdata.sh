@@ -324,10 +324,12 @@ ssm_get probe/client.key       > /etc/gitd/tls/probe.key
 # --- /etc/gitd ownership matrix (R6-Q5) -------------------------------------------
 chown root:git  /etc/gitd/gitd.yaml && chmod 0640 /etc/gitd/gitd.yaml
 chown git:git   /etc/gitd/webhooks.yaml && chmod 0600 /etc/gitd/webhooks.yaml
-# gitd-serve runs as uid 1001:1001 (the unprivileged git user) and is the browse
-# :443 mTLS server, so it must hold the server private key. Grant the git GROUP
-# (gid 1001) traverse on /etc/gitd/tls and read on the four browse files it
-# needs. probe/ssh/ddns material stays root-only (serve never reads it).
+# gitd-serve now runs as root (commit 8ce38ec): containerd/runc does not put
+# CAP_NET_BIND_SERVICE into a non-root process's EFFECTIVE set, so root is
+# required to bind privileged :443; CAP_DAC_OVERRIDE lets root read/write the
+# gitd material (/var/spool/gitd is git:git 0700). The root:git 0640 grants
+# below are now redundant but harmless (they pin group read on the browse TLS
+# files). probe/ssh/ddns material stays root-only (serve never reads it).
 chown root:git /etc/gitd/tls && chmod 0750 /etc/gitd/tls
 chown root:root /etc/gitd/tls/probe.key \
                 /etc/gitd/ssh_host_ed25519_key /etc/gitd/ddns-password
@@ -570,6 +572,11 @@ DDNS_TIMER_EOF
 
 systemctl daemon-reload
 systemctl enable --now gitd-serve.service
+# Only the containerized gitd sshd may serve :22 (R10-Q1). The stock AL2023
+# sshd would otherwise hold the port (and use host keys/config, bypassing our
+# CA auth + hardened config). Disable + mask so it can never start.
+systemctl disable --now sshd.socket sshd.service 2>/dev/null || true
+systemctl mask sshd.socket sshd.service 2>/dev/null || true
 systemctl enable --now gitd-sshd.service
 systemctl enable --now gitd-ddns.timer
 
@@ -716,7 +723,40 @@ dump_sshd_diagnostics() {
 }
 fail_sshd_diagnostics() {
     dump_sshd_diagnostics
-    die "gitd-sshd.service did not remain active"
+    die "gitd-sshd.service is not active and/or not listening on :22"
+}
+# The unit being 'active' can be a crash-loop (Restart=always keeps it active
+# between attempts). Require a real :22 listener that is OUR ctr-spawned sshd,
+# not the stock host sshd — otherwise the boot 'passes' but git SSH is dead.
+# --net-host puts the container socket in the host netns, so ss/netstat here
+# sees it.
+container_sshd_listening() {
+    # Fail-loud guard: without ss or netstat we cannot prove the listener.
+    command -v ss >/dev/null 2>&1 || command -v netstat >/dev/null 2>&1 || return 1
+
+    local lines pids pid exe
+    if command -v ss >/dev/null 2>&1; then
+        lines="$(ss -tlnpH 2>/dev/null)"
+        # ss process column: users:(("sshd",pid=N,fd=M))
+        pids="$(printf '%s\n' "$lines" | awk '/LISTEN/ && /:22 / { print }' \
+            | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p')"
+    else
+        lines="$(netstat -tlnp 2>/dev/null)"
+        # netstat last column: PID/name
+        pids="$(printf '%s\n' "$lines" | awk '/LISTEN/ && /:22 / { print $NF }' \
+            | sed -n 's|/.*||p')"
+    fi
+    [[ -n "$pids" ]] || return 1
+
+    # The stock host sshd (/usr/sbin/sshd) would also LISTEN on :22; only the
+    # container's binary path proves OUR sshd holds the port.
+    for pid in $pids; do
+        exe="$(readlink "/proc/${pid}/exe" 2>/dev/null || true)"
+        case "$exe" in
+            /usr/local/sbin/sshd*) return 0 ;;
+        esac
+    done
+    return 1
 }
 # Poll serve + sshd together: sshd is ordered After=gitd-serve, so a single
 # is-active check on sshd right after serve comes up would race sshd's start.
@@ -727,6 +767,9 @@ for _ in $(seq 1 30); do
 done
 systemctl is-active --quiet gitd-serve.service || fail_unit_diagnostics gitd-serve.service
 systemctl is-active --quiet gitd-sshd.service || fail_sshd_diagnostics
+# Layer the real-listener check on top: 'active' alone can be a crash-loop, so
+# a passing boot must mean the container sshd actually holds :22.
+container_sshd_listening || fail_sshd_diagnostics
 
 # mTLS probe against the browse UI using the probe client cert from SSM. Resolve
 # the hostname to loopback so the server cert (CN=git.cmposer.cc) verifies and
