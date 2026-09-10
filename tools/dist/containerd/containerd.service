@@ -24,6 +24,12 @@ TasksMax=infinity
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/containerd /run/containerd /etc/containerd
+# RuntimeDirectory: systemd pre-creates and owns /run/containerd (root:root,
+# 0750) BEFORE namespacing. ProtectSystem=strict bind-mounts each ReadWritePath
+# into the private namespace, so /run/containerd must already exist or the unit
+# dies with status=226/NAMESPACE on a fresh boot (mount namespace setup fails).
+RuntimeDirectory=containerd
+RuntimeDirectoryMode=0750
 
 [Install]
 WantedBy=multi-user.target
