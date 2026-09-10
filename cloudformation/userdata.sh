@@ -527,7 +527,7 @@ ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --mount type=bind,source=/home/admin,destination=/home/admin,options=rbind:rw \
   --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
   --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
-  git.cmposer.cc/gitd:latest gitd-sshd /usr/local/bin/sshd -D -f /etc/ssh/sshd_config -e
+  git.cmposer.cc/gitd:latest gitd-sshd /usr/local/sbin/sshd -D -f /etc/ssh/sshd_config -e
 Restart=always
 RestartSec=5
 SSHD_SERVICE_EOF
@@ -711,7 +711,7 @@ dump_sshd_diagnostics() {
     # Best-effort (informational): exec a config test inside the running sshd
     # container. Requires the container task to be up; a failure is not fatal —
     # the listener + journal probes above are authoritative.
-    ctr -n default tasks exec --exec-id sshd-t gitd-sshd /usr/local/bin/sshd -t -f /etc/ssh/sshd_config 2>&1 \
+    ctr -n default tasks exec --exec-id sshd-t gitd-sshd /usr/local/sbin/sshd -t -f /etc/ssh/sshd_config 2>&1 \
         || echo "(in-container sshd -t not available)"
 }
 fail_sshd_diagnostics() {
