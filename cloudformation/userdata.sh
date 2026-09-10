@@ -434,8 +434,10 @@ ctr images ls | grep -q "git.cmposer.cc/gitd:latest" || die "image import did no
 echo "gitd: userdata: writing systemd units"
 # --- the three ctr systemd units + timer (R2-Q15, R5-Q4, R8-Q4, R12-Q5) ------------
 # image ref, per-unit cap sets, bind mounts, memory caps. All units:
-#   --rootfs-ro (R5-Q4), --host-resolv-conf + --host-hosts-file (DNS in a
-#   from-scratch image, R5-Q4), --net-host (share host netns, R6-Q7), --rm.
+#   --read-only (R5-Q4), ro bind mounts of /etc/resolv.conf + /etc/hosts (DNS in
+#   a from-scratch image, R5-Q4), --net-host (share host netns, R6-Q7), --rm.
+# Flag syntax is containerd 2.x: --user UID:GID, --memory-limit <bytes>,
+# --mount type=bind,source=...,destination=...,options=rbind:ro.
 cat > /etc/systemd/system/gitd-serve.service <<'SERVE_EOF'
 [Unit]
 Description=gitd browse (:443 mTLS) + socket server (uid 1001)
@@ -444,13 +446,15 @@ Requires=containerd.service
 
 [Service]
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
-  --uid 1001 --gid 1001 \
-  --rootfs-ro --host-resolv-conf --host-hosts-file \
+  --user 1001:1001 \
+  --read-only \
   --cap-drop ALL --cap-add NET_BIND_SERVICE \
-  --memory 128MiB \
-  --mount type=bind,src=/srv/git,dst=/srv/git,ro \
-  --mount type=bind,src=/var/spool/gitd,dst=/var/spool/gitd,rw \
-  --mount type=bind,src=/etc/gitd,dst=/etc/gitd,ro \
+  --memory-limit 134217728 \
+  --mount type=bind,source=/srv/git,destination=/srv/git,options=rbind:ro \
+  --mount type=bind,source=/var/spool/gitd,destination=/var/spool/gitd,options=rbind:rw \
+  --mount type=bind,source=/etc/gitd,destination=/etc/gitd,options=rbind:ro \
+  --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
+  --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
   git.cmposer.cc/gitd:latest /usr/local/bin/gitd serve --config /etc/gitd/gitd.yaml
 Restart=always
 RestartSec=5
@@ -467,14 +471,16 @@ Requires=containerd.service
 # gateway) and /etc/ssh (sshd_config + host key + trusted CA + auth_principals +
 # revoked_keys), matching the image's baked paths.
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
-  --rootfs-ro --host-resolv-conf --host-hosts-file \
+  --read-only \
   --cap-drop ALL --cap-add CHOWN --cap-add SETGID --cap-add SETUID --cap-add SYS_CHROOT \
-  --memory 320MiB \
-  --mount type=bind,src=/srv/git,dst=/srv/git,rw \
-  --mount type=bind,src=/var/spool/gitd,dst=/var/spool/gitd,rw \
-  --mount type=bind,src=/etc/gitd,dst=/etc/gitd,ro \
-  --mount type=bind,src=/etc/gitd,dst=/etc/ssh,ro \
-  --mount type=bind,src=/home/admin,dst=/home/admin,rw \
+  --memory-limit 335544320 \
+  --mount type=bind,source=/srv/git,destination=/srv/git,options=rbind:rw \
+  --mount type=bind,source=/var/spool/gitd,destination=/var/spool/gitd,options=rbind:rw \
+  --mount type=bind,source=/etc/gitd,destination=/etc/gitd,options=rbind:ro \
+  --mount type=bind,source=/etc/gitd,destination=/etc/ssh,options=rbind:ro \
+  --mount type=bind,source=/home/admin,destination=/home/admin,options=rbind:rw \
+  --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
+  --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
   git.cmposer.cc/gitd:latest /usr/local/bin/sshd -D -f /etc/ssh/sshd_config -e
 Restart=always
 RestartSec=5
@@ -490,10 +496,12 @@ Requires=containerd.service
 Type=oneshot
 # Runs as root so it can read ddns-password (root:root 0600, R6-Q5/R7-Q3).
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
-  --rootfs-ro --host-resolv-conf --host-hosts-file \
+  --read-only \
   --cap-drop ALL \
-  --memory 64MiB \
-  --mount type=bind,src=/etc/gitd,dst=/etc/gitd,ro \
+  --memory-limit 67108864 \
+  --mount type=bind,source=/etc/gitd,destination=/etc/gitd,options=rbind:ro \
+  --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
+  --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
   git.cmposer.cc/gitd:latest /usr/local/bin/gitd ddns --config /etc/gitd/gitd.yaml
 DDNS_SERVICE_EOF
 
