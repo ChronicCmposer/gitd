@@ -221,9 +221,11 @@ die() { echo "gitd: update: \$*" >&2; exit 1; }
 cat > "\$PINNED_PUBKEY" <<'GPGKEY'
 ${SIGNING_PUBKEY}
 GPGKEY
-# GPG verification is REQUIRED (provenance on top of the pinned sha256). Install
-# gnupg2 if absent; fail fast if it still cannot verify.
-command -v gpg >/dev/null 2>&1 || { echo "gitd: update: gpg not found; installing gnupg2" >&2; dnf install -y -q gnupg2; }
+# GPG verification is REQUIRED (provenance on top of the pinned sha256), but it
+# is agent-free: the verify below uses --no-autostart (public-key only, no
+# gpg-agent needed). AL2023 ships gnupg2-minimal (gpg present, conflicts with
+# the full gnupg2), so the fallback install is gnupg2-minimal — never gnupg2.
+command -v gpg >/dev/null 2>&1 || { echo "gitd: update: gpg not found; installing gnupg2-minimal" >&2; dnf install -y -q gnupg2-minimal; }
 command -v gpg >/dev/null 2>&1 || die "gpg still missing after install; cannot verify artifact provenance"
 echo "gitd: update: fetching gitd-container.tar + .asc (GitHub primary, S3 fallback)"
 rm -f "\$TAR.dl" "\$SIG.dl"
@@ -246,9 +248,9 @@ fi
 # GPG provenance first (against the pinned key), then the pinned sha256.
 VHOME=\$(mktemp -d)
 trap 'rm -rf "\$VHOME"' EXIT
-gpg --homedir "\$VHOME" --batch --quiet --import "\$PINNED_PUBKEY" \\
+gpg --homedir "\$VHOME" --batch --quiet --no-tty --no-autostart --import "\$PINNED_PUBKEY" \\
     || die "failed to import pinned GPG public key"
-gpg --homedir "\$VHOME" --batch --quiet --verify "\$SIG" "\$TAR" \\
+gpg --homedir "\$VHOME" --batch --quiet --no-tty --no-autostart --verify "\$SIG" "\$TAR" \\
     || die "GPG signature verification FAILED for \$TAR; provenance not proven — aborting"
 rm -rf "\$VHOME"; trap - EXIT
 echo "gitd: update: GPG signature verified (pinned key)"

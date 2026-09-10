@@ -18,8 +18,12 @@
 # provenance. It never replaces the sha256 check.
 #
 # GPG behavior is pinned: --batch --yes --armor --detach-sign to sign, and
-# --verify with a hermetic homedir to check. No interactive trust prompts, and a
-# fixed-length 64-hex compare elsewhere guarantees the hash is never truncated.
+# --verify with a hermetic homedir to check. Verification is agent-free
+# (--no-autostart): checking a detached signature against an imported PUBLIC key
+# is not a secret-key operation, so gpg-agent is never required. That is what
+# makes verification work on AL2023's gnupg2-minimal, which ships gpg but NO
+# gpg-agent binary. No interactive trust prompts, and a fixed-length 64-hex
+# compare elsewhere guarantees the hash is never truncated.
 
 set -euo pipefail
 
@@ -89,9 +93,11 @@ verify_artifact() {
     require_gpg
     gpg_home="$(mktemp -d)"
     trap 'rm -rf "${gpg_home}"' EXIT
-    gpg --homedir "${gpg_home}" --batch --quiet --import "${pubkey}" \
+    # Public-key verify never needs gpg-agent: --no-autostart keeps the check
+    # agent-free, so it works with gnupg2-minimal on AL2023 (no gpg-agent binary).
+    gpg --homedir "${gpg_home}" --batch --quiet --no-tty --no-autostart --import "${pubkey}" \
         || die "failed to import pinned GPG public key ${pubkey} into the throwaway keyring"
-    gpg --homedir "${gpg_home}" --batch --quiet --verify "${sig}" "${file}" \
+    gpg --homedir "${gpg_home}" --batch --quiet --no-tty --no-autostart --verify "${sig}" "${file}" \
         || die "GPG signature verification FAILED for ${file}; provenance not proven against the pinned key — refusing to trust it"
     rm -rf "${gpg_home}"
     trap - EXIT
