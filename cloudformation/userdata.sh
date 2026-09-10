@@ -596,16 +596,43 @@ systemctl enable --now gitd-reboot.timer
 echo "gitd: userdata: waiting for units + running liveness probe"
 # --- wait for units + liveness probe (R9-Q9) ----------------------------------------
 # Liveness is the ssh greeting + an mTLS curl against :443 (no cert-less healthz).
+# Fail-loud (code-philosophy): a container unit that is not active dumps its
+# journal/status and the containerd task/container/image tables BEFORE boot dies,
+# so a failed boot carries the evidence needed to diagnose a ctr run failure.
+dump_unit_diagnostics() {
+    local unit="$1"
+    echo "gitd: userdata: ----- ${unit} journal (last 40) -----"
+    journalctl -u "${unit}" --no-pager -n 40 2>/dev/null || echo "(no journal)"
+    echo "gitd: userdata: ----- ${unit} status -----"
+    systemctl status "${unit}" --no-pager 2>/dev/null || true
+    echo "gitd: userdata: ----- containerd tasks -----"
+    ctr -n default tasks ls 2>/dev/null || echo "(ctr tasks ls failed)"
+    echo "gitd: userdata: ----- containerd containers -----"
+    ctr -n default containers ls 2>/dev/null || echo "(ctr containers ls failed)"
+    echo "gitd: userdata: ----- containerd images -----"
+    ctr -n default images ls 2>/dev/null || echo "(ctr images ls failed)"
+    echo "gitd: userdata: ----- gitd procs -----"
+    ps aux | grep '[g]itd' || echo "(no gitd process)"
+}
+fail_unit_diagnostics() {
+    local unit="$1"
+    dump_unit_diagnostics "${unit}"
+    die "${unit} did not start"
+}
+# Poll serve + sshd together: sshd is ordered After=gitd-serve, so a single
+# is-active check on sshd right after serve comes up would race sshd's start.
 for _ in $(seq 1 30); do
-    systemctl is-active --quiet gitd-serve.service && break
+    systemctl is-active --quiet gitd-serve.service \
+        && systemctl is-active --quiet gitd-sshd.service && break
     sleep 2
 done
-systemctl is-active --quiet gitd-serve.service || die "gitd-serve did not start"
-systemctl is-active --quiet gitd-sshd.service || die "gitd-sshd did not start"
+systemctl is-active --quiet gitd-serve.service || fail_unit_diagnostics gitd-serve.service
+systemctl is-active --quiet gitd-sshd.service || fail_unit_diagnostics gitd-sshd.service
 
 # mTLS probe against the browse UI using the probe client cert from SSM. Resolve
 # the hostname to loopback so the server cert (CN=git.cmposer.cc) verifies and
-# the Host header is on the allowlist.
+# the Host header is on the allowlist. If the probe fails with active units, the
+# container process is up but not serving :443; dump serve's diagnostics too.
 curl --fail --silent --show-error \
     --cacert /etc/gitd/tls/client-ca.crt \
     --cert /etc/gitd/tls/probe.crt \
@@ -613,7 +640,7 @@ curl --fail --silent --show-error \
     --resolve "git.cmposer.cc:443:127.0.0.1" \
     --max-time 20 \
     "https://git.cmposer.cc/" >/dev/null \
-    || die "browse mTLS liveness probe failed"
+    || { dump_unit_diagnostics gitd-serve.service; die "browse mTLS liveness probe failed"; }
 
 echo "gitd: userdata: boot complete; git.cmposer.cc is up"
 
