@@ -438,6 +438,19 @@ echo "gitd: userdata: writing systemd units"
 #   a from-scratch image, R5-Q4), --net-host (share host netns, R6-Q7), --rm.
 # Flag syntax is containerd 2.x: --user UID:GID, --memory-limit <bytes>,
 # --mount type=bind,source=...,destination=...,options=rbind:ro.
+#
+# Capability flags (containerd 2.3.5, verified against the pinned ctr):
+#   * EVERY --cap-drop/--cap-add token must start with "CAP_" (run_unix.go
+#     267-283); there is NO "ALL" token — "--cap-drop ALL" is rejected with
+#     "capabilities must be specified with 'CAP_' prefix", and "CAP_ALL" is a
+#     silent no-op (removeCap exact-matches the 14 default unix caps in
+#     pkg/oci/spec.go defaultUnixCaps(), and "CAP_ALL" is not one of them).
+#   * --cap-add is applied BEFORE --cap-drop (run_unix.go 267 then 276), so any
+#     cap listed in BOTH is dropped after being added. Each drop list below is
+#     therefore the default-unix-caps COMPLEMENT of that unit's adds, so the
+#     container's final cap set is exactly the adds (least privilege).
+#   * Only repeated --cap-drop flags work: a comma-separated list is treated as
+#     one token and silently drops nothing.
 cat > /etc/systemd/system/gitd-serve.service <<'SERVE_EOF'
 [Unit]
 Description=gitd browse (:443 mTLS) + socket server (uid 1001)
@@ -448,7 +461,11 @@ Requires=containerd.service
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --user 1001:1001 \
   --read-only \
-  --cap-drop ALL --cap-add CAP_NET_BIND_SERVICE \
+  --cap-drop CAP_CHOWN --cap-drop CAP_DAC_OVERRIDE --cap-drop CAP_FSETID \
+  --cap-drop CAP_FOWNER --cap-drop CAP_MKNOD --cap-drop CAP_NET_RAW \
+  --cap-drop CAP_SETGID --cap-drop CAP_SETUID --cap-drop CAP_SETFCAP \
+  --cap-drop CAP_SETPCAP --cap-drop CAP_SYS_CHROOT --cap-drop CAP_KILL \
+  --cap-drop CAP_AUDIT_WRITE --cap-add CAP_NET_BIND_SERVICE \
   --memory-limit 134217728 \
   --mount type=bind,source=/srv/git,destination=/srv/git,options=rbind:ro \
   --mount type=bind,source=/var/spool/gitd,destination=/var/spool/gitd,options=rbind:rw \
@@ -472,7 +489,11 @@ Requires=containerd.service
 # revoked_keys), matching the image's baked paths.
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --read-only \
-  --cap-drop ALL --cap-add CAP_CHOWN --cap-add CAP_SETGID --cap-add CAP_SETUID --cap-add CAP_SYS_CHROOT \
+  --cap-drop CAP_DAC_OVERRIDE --cap-drop CAP_FSETID --cap-drop CAP_FOWNER \
+  --cap-drop CAP_MKNOD --cap-drop CAP_NET_RAW --cap-drop CAP_SETFCAP \
+  --cap-drop CAP_SETPCAP --cap-drop CAP_NET_BIND_SERVICE --cap-drop CAP_KILL \
+  --cap-drop CAP_AUDIT_WRITE --cap-add CAP_CHOWN --cap-add CAP_SETGID \
+  --cap-add CAP_SETUID --cap-add CAP_SYS_CHROOT \
   --memory-limit 335544320 \
   --mount type=bind,source=/srv/git,destination=/srv/git,options=rbind:rw \
   --mount type=bind,source=/var/spool/gitd,destination=/var/spool/gitd,options=rbind:rw \
@@ -497,7 +518,11 @@ Type=oneshot
 # Runs as root so it can read ddns-password (root:root 0600, R6-Q5/R7-Q3).
 ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --read-only \
-  --cap-drop ALL \
+  --cap-drop CAP_CHOWN --cap-drop CAP_DAC_OVERRIDE --cap-drop CAP_FSETID \
+  --cap-drop CAP_FOWNER --cap-drop CAP_MKNOD --cap-drop CAP_NET_RAW \
+  --cap-drop CAP_SETGID --cap-drop CAP_SETUID --cap-drop CAP_SETFCAP \
+  --cap-drop CAP_SETPCAP --cap-drop CAP_NET_BIND_SERVICE \
+  --cap-drop CAP_SYS_CHROOT --cap-drop CAP_KILL --cap-drop CAP_AUDIT_WRITE \
   --memory-limit 67108864 \
   --mount type=bind,source=/etc/gitd,destination=/etc/gitd,options=rbind:ro \
   --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
