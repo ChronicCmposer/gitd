@@ -349,13 +349,14 @@ source "${BUNDLE_DIR}/sign-artifact.sh"
 [[ -f "${GPG_KEY_PIN}" ]] || die "pinned GPG signing key missing from bundle: ${GPG_KEY_PIN}"
 
 # GPG verification is REQUIRED (provenance on top of the pinned sha256). Ensure
-# gnupg2 is present; if it is still missing after install, fail fast rather than
-# silently trusting the image.
-if ! command -v gpg >/dev/null 2>&1; then
-    echo "gitd: image: gpg not found; installing gnupg2 (required for signature verification)" >&2
+# gnupg2 (which ships both gpg and gpg-agent) is present; if either is still
+# missing after install, fail fast rather than silently trusting the image.
+if ! command -v gpg >/dev/null 2>&1 || ! command -v gpg-agent >/dev/null 2>&1; then
+    echo "gitd: image: gpg/gpg-agent not found; installing gnupg2 (required for signature verification)" >&2
     dnf install -y -q gnupg2
 fi
 require_cmd gpg
+require_cmd gpg-agent
 
 IMAGE_TAR="${BUNDLE_DIR}/gitd-container.tar"
 GITHUB_IMAGE_URL="https://github.com/ChronicCmposer/gitd/releases/download/${GITD_RELEASE_TAG}/gitd-container.tar"
