@@ -3,7 +3,10 @@
 #
 # Installed by Phase 7's userdata and run hourly as root (systemd timer). It
 # pulls the browse mTLS material (server cert/key, client-CA pool, revocation
-# list) from SSM /gitd/server/* and writes it to /etc/gitd/tls/ root:root.
+# list) from SSM /gitd/server/* and writes it to /etc/gitd/tls/. Files are
+# written root:git with group read (0750 dir / 0640 files) so gitd-serve — which
+# runs as uid/gid 1001 — can keep reading the browse mTLS material; this group
+# grant is re-applied after every atomic install so a rotation never breaks it.
 # Zero-downtime: browse re-reads every file per handshake (R5-Q6, R7-Q5), so
 # this script never restarts the service — it just atomically replaces files.
 #
@@ -70,5 +73,14 @@ mv -f "${server_crt}" "${TLS_DIR}/server.crt"
 mv -f "${server_key}" "${TLS_DIR}/server.key"
 mv -f "${client_ca}"  "${TLS_DIR}/client-ca.crt"
 mv -f "${revoked}"    "${TLS_DIR}/revoked.crl"
+
+# --- re-apply git-group grant (keeps gitd-serve=uid1001 reading mTLS material) --
+# mv -f replaces the inodes, so the root:git / 0640 ownership set at boot is lost
+# on rotation. Restore it here so gitd-serve (runs as uid/gid 1001 and is the
+# browse mTLS server) can traverse the dir and read the four browse files.
+chown root:git "${TLS_DIR}"
+chmod 0750 "${TLS_DIR}"
+chown root:git "${TLS_DIR}/server.crt" "${TLS_DIR}/server.key" "${TLS_DIR}/client-ca.crt" "${TLS_DIR}/revoked.crl"
+chmod 0640 "${TLS_DIR}/server.crt" "${TLS_DIR}/server.key" "${TLS_DIR}/client-ca.crt" "${TLS_DIR}/revoked.crl"
 
 echo "gitd: cert-sync: /etc/gitd/tls refreshed from SSM (zero-downtime)"

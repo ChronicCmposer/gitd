@@ -314,18 +314,25 @@ ssm_get probe/client.key       > /etc/gitd/tls/probe.key
 # --- /etc/gitd ownership matrix (R6-Q5) -------------------------------------------
 chown root:git  /etc/gitd/gitd.yaml && chmod 0640 /etc/gitd/gitd.yaml
 chown git:git   /etc/gitd/webhooks.yaml && chmod 0600 /etc/gitd/webhooks.yaml
-chown root:root /etc/gitd/tls/server.key /etc/gitd/tls/probe.key \
+# gitd-serve runs as uid 1001:1001 (the unprivileged git user) and is the browse
+# :443 mTLS server, so it must hold the server private key. Grant the git GROUP
+# (gid 1001) traverse on /etc/gitd/tls and read on the four browse files it
+# needs. probe/ssh/ddns material stays root-only (serve never reads it).
+chown root:git /etc/gitd/tls && chmod 0750 /etc/gitd/tls
+chown root:root /etc/gitd/tls/probe.key \
                 /etc/gitd/ssh_host_ed25519_key /etc/gitd/ddns-password
-chmod 0600 /etc/gitd/tls/server.key /etc/gitd/tls/probe.key \
+chmod 0600 /etc/gitd/tls/probe.key \
            /etc/gitd/ssh_host_ed25519_key /etc/gitd/ddns-password
-chown root:root /etc/gitd/tls/server.crt /etc/gitd/tls/client-ca.crt \
-                /etc/gitd/tls/revoked.crl /etc/gitd/tls/probe.crt \
+chown root:git /etc/gitd/tls/server.key /etc/gitd/tls/server.crt \
+               /etc/gitd/tls/client-ca.crt /etc/gitd/tls/revoked.crl
+chmod 0640 /etc/gitd/tls/server.key /etc/gitd/tls/server.crt \
+           /etc/gitd/tls/client-ca.crt /etc/gitd/tls/revoked.crl
+chown root:root /etc/gitd/tls/probe.crt \
                 /etc/gitd/ssh_host_ed25519_key.pub \
                 /etc/gitd/ssh_host_ed25519_key-cert.pub \
                 /etc/gitd/trusted_user_ca_keys.pem \
                 /etc/gitd/sshd_config
-chmod 0644 /etc/gitd/tls/server.crt /etc/gitd/tls/client-ca.crt \
-           /etc/gitd/tls/revoked.crl /etc/gitd/tls/probe.crt \
+chmod 0644 /etc/gitd/tls/probe.crt \
            /etc/gitd/ssh_host_ed25519_key.pub \
            /etc/gitd/ssh_host_ed25519_key-cert.pub \
            /etc/gitd/trusted_user_ca_keys.pem \
@@ -333,7 +340,6 @@ chmod 0644 /etc/gitd/tls/server.crt /etc/gitd/tls/client-ca.crt \
 chown -R root:root /etc/gitd/auth_principals
 chmod -R 0644 /etc/gitd/auth_principals
 chown root:root /etc/gitd/revoked_keys && chmod 0644 /etc/gitd/revoked_keys
-chmod 0700 /etc/gitd/tls
 
 echo "gitd: userdata: fetching/verifying/importing OCI image"
 # --- fetch + verify + import the OCI image (R3-Q2) ---------------------------------
