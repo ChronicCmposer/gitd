@@ -257,7 +257,6 @@ cat > /etc/gitd/sshd_config <<'SSHD_EOF'
 Port 22
 ListenAddress 0.0.0.0
 Protocol 2
-UsePAM no
 PermitRootLogin no
 PermitUserEnvironment no
 PermitEmptyPasswords no
@@ -507,6 +506,8 @@ SERVE_EOF
 
 cat > /etc/systemd/system/gitd-sshd.service <<'SSHD_SERVICE_EOF'
 [Unit]
+# Runs as root (like gitd-serve/gitd-ddns). CAP_NET_BIND_SERVICE is added
+# (and NOT dropped) so the container sshd can bind privileged :22.
 Description=gitd OpenSSH server (container, PQC kex)
 After=gitd-serve.service containerd.service
 Requires=containerd.service
@@ -519,9 +520,9 @@ ExecStart=/usr/local/bin/ctr run --rm --net-host \
   --read-only \
   --cap-drop CAP_DAC_OVERRIDE --cap-drop CAP_FSETID --cap-drop CAP_FOWNER \
   --cap-drop CAP_MKNOD --cap-drop CAP_NET_RAW --cap-drop CAP_SETFCAP \
-  --cap-drop CAP_SETPCAP --cap-drop CAP_NET_BIND_SERVICE --cap-drop CAP_KILL \
-  --cap-drop CAP_AUDIT_WRITE --cap-add CAP_CHOWN --cap-add CAP_SETGID \
-  --cap-add CAP_SETUID --cap-add CAP_SYS_CHROOT \
+  --cap-drop CAP_SETPCAP --cap-drop CAP_KILL --cap-drop CAP_AUDIT_WRITE \
+  --cap-add CAP_CHOWN --cap-add CAP_SETGID --cap-add CAP_SETUID \
+  --cap-add CAP_SYS_CHROOT --cap-add CAP_NET_BIND_SERVICE \
   --memory-limit 335544320 \
   --mount type=bind,source=/srv/git,destination=/srv/git,options=rbind:rw \
   --mount type=bind,source=/var/spool/gitd,destination=/var/spool/gitd,options=rbind:rw \
@@ -727,6 +728,33 @@ fail_sshd_diagnostics() {
     dump_sshd_diagnostics
     die "gitd-sshd.service is not active and/or not listening on :22"
 }
+# DDNS boot diagnostics (code-philosophy: fail-loud). A stale DDNS record leaves
+# git.cmposer.cc unreachable, so a failed refresh must carry its evidence; every
+# probe is guarded (|| echo/|| true) so one failure never masks another.
+dump_ddns_diagnostics() {
+    echo "gitd: userdata: ----- gitd-ddns.service journal (last 40) -----"
+    journalctl -u gitd-ddns.service --no-pager -n 40 2>/dev/null || echo "(no gitd-ddns journal)"
+    echo "gitd: userdata: ----- gitd-ddns.service status -----"
+    systemctl status gitd-ddns.service --no-pager 2>/dev/null || true
+    echo "gitd: userdata: ----- gitd-ddns.timer status -----"
+    systemctl status gitd-ddns.timer --no-pager 2>/dev/null || true
+    echo "gitd: userdata: ----- ddns-password file -----"
+    ls -l /etc/gitd/ddns-password 2>/dev/null || echo "(no /etc/gitd/ddns-password)"
+    echo "gitd: userdata: ----- ddns: section of gitd.yaml (password redacted) -----"
+    # Print the ddns: section up to the next top-level key; any inline password
+    # value is redacted. The password itself lives in ddns-password and is never
+    # echoed (least privilege / evidence-carrying diagnostics).
+    awk '
+        /^ddns:/ { in_ddns = 1 }
+        in_ddns && /^[^[:space:]#]/ && !/^ddns:/ { exit }
+        in_ddns { print }
+    ' /etc/gitd/gitd.yaml 2>/dev/null | sed 's/password:.*/password: <redacted>/i' \
+        || echo "(cannot read ddns section of /etc/gitd/gitd.yaml)"
+}
+fail_ddns_diagnostics() {
+    dump_ddns_diagnostics
+    die "gitd-ddns.service did not refresh the DDNS record"
+}
 # The unit being 'active' can be a crash-loop (Restart=always keeps it active
 # between attempts). Require a real :22 listener that is OUR ctr-spawned sshd,
 # not the stock host sshd — otherwise the boot 'passes' but git SSH is dead.
@@ -772,6 +800,14 @@ systemctl is-active --quiet gitd-sshd.service || fail_sshd_diagnostics
 # Layer the real-listener check on top: 'active' alone can be a crash-loop, so
 # a passing boot must mean the container sshd actually holds :22.
 container_sshd_listening || fail_sshd_diagnostics
+
+# DDNS one-shot at boot (code-philosophy: fail-loud): refreshes the A record
+# against the live EIP and proves the ddns pipeline end-to-end. Boot is the best
+# moment to re-pin the record — the 6h timer only catches drift later, and a
+# failed refresh means git.cmposer.cc points at the wrong IP (service outage),
+# so we fail loud. Type=oneshot blocks until completion, so a non-zero exit
+# here is a real refresh failure.
+systemctl start gitd-ddns.service || fail_ddns_diagnostics
 
 # mTLS probe against the browse UI using the probe client cert from SSM. Resolve
 # the hostname to loopback so the server cert (CN=git.cmposer.cc) verifies and

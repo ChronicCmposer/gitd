@@ -56,4 +56,8 @@ The `gitd ddns` subcommand hits
 `https://dynamicdns.park-your-domain.com/update?host=git&domain=cmposer.cc&password=...`
 with the `ip` parameter omitted (Namecheap uses the requester IP = the
 instance's auto-assigned public IP).
-A "Good <ip>" reply is success; anything else fails loudly (fail-fast).
+A "Good <ip>", "No change" (IP unchanged), or an XML `<interface-response>` with
+`<ErrCount>0</ErrCount>` is a success; anything else fails loudly (fail-fast).
+Note Namecheap returns HTTP 200 for both success and error, and since ~2021 its
+XML body is misdeclared as UTF-16 (actually UTF-8) — gitd regex-matches the body
+rather than trusting the HTTP status or the XML encoding declaration.
