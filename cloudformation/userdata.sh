@@ -146,12 +146,37 @@ systemctl enable --now containerd.service
 # uids match the image (R2-Q15/R7-Q3): git 1001, admin 1000. The admin's real
 # shell lives inside the container; the host account exists only to own
 # /home/admin (a bind-mount target) with a matching uid.
-if ! getent group admin >/dev/null; then groupadd -g 1000 admin; fi
-if ! getent passwd admin >/dev/null; then
+# GID/UID guards are NUMERIC (getent group <gid> / getent passwd <uid>), not
+# by name: on AL2023 the gid 1000/1001 may already exist under a DIFFERENT
+# group name (getent group admin would be empty -> groupadd -g 1000 admin
+# aborts with "GID already exists"). The contract (R2-Q15/R7-Q3) only requires
+# uid/gid admin=1000 and uid/gid git=1001 to exist and be the user's primary
+# gid; the owning group NAME is irrelevant. So guard by numeric gid/uid and let
+# useradd -g <gid> reference whatever group already owns that gid.
+if ! getent group 1000 >/dev/null; then groupadd -g 1000 admin; fi
+if getent passwd 1000 >/dev/null; then
+    # uid 1000 already exists: it MUST be our admin account, else fail loud
+    # (code-philosophy) — silently proceeding would orphan /home/admin.
+    if ! getent passwd admin >/dev/null; then
+        die "uid 1000 already exists under a different user; refusing to proceed"
+    fi
+else
+    if getent passwd admin >/dev/null; then
+        # admin already exists but with a different uid: useradd below would
+        # collide on the name — fail loud rather than guess.
+        die "user 'admin' already exists with a uid != 1000; refusing to proceed"
+    fi
     useradd -u 1000 -g 1000 -c "gitd admin" -m -d /home/admin -s /usr/sbin/nologin admin
 fi
-if ! getent group git >/dev/null; then groupadd -g 1001 git; fi
-if ! getent passwd git >/dev/null; then
+if ! getent group 1001 >/dev/null; then groupadd -g 1001 git; fi
+if getent passwd 1001 >/dev/null; then
+    if ! getent passwd git >/dev/null; then
+        die "uid 1001 already exists under a different user; refusing to proceed"
+    fi
+else
+    if getent passwd git >/dev/null; then
+        die "user 'git' already exists with a uid != 1001; refusing to proceed"
+    fi
     useradd -u 1001 -g 1001 -c "gitd git gateway" -d /var/spool/gitd -s /usr/sbin/nologin git
 fi
 
