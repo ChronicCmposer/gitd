@@ -24,6 +24,7 @@
 #   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
 #   --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
 #   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
+#   --debug                      shell trace + raw AWS create/update-stack output
 # Environment: the image release is assumed already signed + published by
 # 'make release' (Option B); deploy.sh VERIFIES it and needs gh CLI only when
 # the release is missing (create path).
@@ -43,6 +44,7 @@ IMAGE_TAR="${REPO_ROOT}/tools/dist/out/gitd-container.tar"
 GITD_RELEASE_TAG="gitd-container"
 BUNDLE_DIR="${SCRIPT_DIR}/out"
 DIST_REPO="ChronicCmposer/gitd"
+DEBUG_FLAG=0
 
 die() {
     echo "gitd: deploy: $*" >&2
@@ -67,6 +69,7 @@ while [[ $# -gt 0 ]]; do
         --image-tar)         IMAGE_TAR="${2:?missing value}"; shift 2 ;;
         --gitd-release-tag)  GITD_RELEASE_TAG="${2:?missing value}"; shift 2 ;;
         --bundle-dir)        BUNDLE_DIR="${2:?missing value}"; shift 2 ;;
+        --debug)             DEBUG_FLAG=1; shift ;;
         -h|--help)
             cat <<'HELP'
 deploy.sh — build the deployment bundle + deploy the gitd CloudFormation stack.
@@ -83,6 +86,7 @@ Options:
   --image-tar <path>           gitd-container.tar (default tools/dist/out/gitd-container.tar)
   --gitd-release-tag <tag>     gitd-container family release tag on ChronicCmposer/gitd (default gitd-container)
   --bundle-dir <dir>           staging dir for the bundle (default cloudformation/out)
+  --debug                      shell trace + raw AWS create/update-stack output
 
 Environment: the image is assumed already signed + published by 'make release'
 (Option B); deploy.sh VERIFIES it against the pinned key and only creates the
@@ -93,6 +97,30 @@ HELP
         *) die "unknown option '$1' (see --help)" ;;
     esac
 done
+
+# --- DEBUG control ----------------------------------------------------------------
+# DEBUG turns on when either the env var is truthy (1/true/yes) OR the --debug
+# flag was passed. Normalize to a single trusted 0/1 so the rest of the script
+# branches on one value (parse, don't validate). When on, shell-trace everything.
+case "${DEBUG:-}" in
+    1|true|yes) DEBUG=1 ;;
+    *)           DEBUG=0 ;;
+esac
+if [[ "${DEBUG_FLAG}" == "1" ]]; then
+    DEBUG=1
+fi
+if [[ "${DEBUG}" == "1" ]]; then
+    set -x
+fi
+
+# Emit the AWS CLI --debug flag so the raw HTTPS request/response (which carries
+# the full validation-error list) reaches the terminal. No-op when DEBUG is off,
+# keeping the default behavior byte-identical.
+cfn_debug() {
+    if [[ "${DEBUG}" == "1" ]]; then
+        echo "--debug"
+    fi
+}
 
 # --- early exit: required inputs (fail-fast, code-philosophy) --------------------
 [[ -n "${KEY_NAME}" ]] || die "--key-name is required"
@@ -211,25 +239,49 @@ PARAMS=(
 
 if aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     echo "gitd: deploy: stack '${STACK_NAME}' exists; updating"
-    aws cloudformation update-stack \
-        --stack-name "${STACK_NAME}" \
-        --template-body "file://${SCRIPT_DIR}/stack.yaml" \
-        --parameters "${PARAMS[@]}" \
-        --capabilities CAPABILITY_IAM \
-        --region "${REGION}" >/dev/null
-    aws cloudformation wait stack-update-complete --stack-name "${STACK_NAME}" --region "${REGION}"
+    if [[ "${DEBUG}" == "1" ]]; then
+        aws cloudformation update-stack \
+            --stack-name "${STACK_NAME}" \
+            --template-body "file://${SCRIPT_DIR}/stack.yaml" \
+            --parameters "${PARAMS[@]}" \
+            --capabilities CAPABILITY_IAM \
+            --region "${REGION}" --debug
+    else
+        aws cloudformation update-stack \
+            --stack-name "${STACK_NAME}" \
+            --template-body "file://${SCRIPT_DIR}/stack.yaml" \
+            --parameters "${PARAMS[@]}" \
+            --capabilities CAPABILITY_IAM \
+            --region "${REGION}" >/dev/null
+    fi
+    aws cloudformation wait stack-update-complete --stack-name "${STACK_NAME}" --region "${REGION}" $(cfn_debug)
     echo "gitd: deploy: stack update complete"
+    if [[ "${DEBUG}" == "1" ]]; then
+        echo "gitd: deploy: (DEBUG) if the waiter reports a failure, run: aws cloudformation describe-stack-events --stack-name ${STACK_NAME} --region ${REGION} --query 'StackEvents[?ResourceStatus==\`UPDATE_FAILED\`].{Res:LogicalResourceId,Reason:ResourceStatusReason}'"
+    fi
 else
     echo "gitd: deploy: creating stack '${STACK_NAME}'"
-    aws cloudformation create-stack \
-        --stack-name "${STACK_NAME}" \
-        --template-body "file://${SCRIPT_DIR}/stack.yaml" \
-        --parameters "${PARAMS[@]}" \
-        --capabilities CAPABILITY_IAM \
-        --region "${REGION}" >/dev/null
+    if [[ "${DEBUG}" == "1" ]]; then
+        aws cloudformation create-stack \
+            --stack-name "${STACK_NAME}" \
+            --template-body "file://${SCRIPT_DIR}/stack.yaml" \
+            --parameters "${PARAMS[@]}" \
+            --capabilities CAPABILITY_IAM \
+            --region "${REGION}" --debug
+    else
+        aws cloudformation create-stack \
+            --stack-name "${STACK_NAME}" \
+            --template-body "file://${SCRIPT_DIR}/stack.yaml" \
+            --parameters "${PARAMS[@]}" \
+            --capabilities CAPABILITY_IAM \
+            --region "${REGION}" >/dev/null
+    fi
     # create-stack completes only after the instance's boot signal (CreationPolicy).
-    aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}" --region "${REGION}"
+    aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}" --region "${REGION}" $(cfn_debug)
     echo "gitd: deploy: stack create complete (boot signal received)"
+    if [[ "${DEBUG}" == "1" ]]; then
+        echo "gitd: deploy: (DEBUG) if the waiter reports a failure, run: aws cloudformation describe-stack-events --stack-name ${STACK_NAME} --region ${REGION} --query 'StackEvents[?ResourceStatus==\`CREATE_FAILED\`].{Res:LogicalResourceId,Reason:ResourceStatusReason}'"
+    fi
 fi
 
 echo "gitd: deploy: done"
