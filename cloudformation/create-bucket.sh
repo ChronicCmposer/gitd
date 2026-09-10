@@ -26,6 +26,11 @@
 #   - Lifecycle:             NoncurrentExpire30d (NoncurrentDays: 30)
 #                            AbortIncompleteMultipartUpload7d
 #                            (DaysAfterInitiation: 7)
+#                            Each rule carries an explicit empty Filter
+#                            (whole-bucket): S3's published schema rejects a
+#                            rule with neither Filter nor Prefix as
+#                            MalformedXML, so the Filter is required, not
+#                            cosmetic.
 #
 # Idempotent: if the bucket already exists, each required config piece is
 # verified against the spec and only the missing pieces are (re)applied. A
@@ -55,6 +60,7 @@ REGION="${REGION:-us-east-2}"
 BUCKET="${BUCKET:-git.cmposer.cc}"
 
 require_cmd aws
+require_cmd python3   # validates the lifecycle JSON before it is sent to S3
 
 # --- helpers -------------------------------------------------------------------
 
@@ -214,23 +220,38 @@ if ! encryption_satisfied; then
 fi
 
 if ! lifecycle_satisfied; then
+    # lifecycle_config is the exact body for put-bucket-lifecycle-configuration,
+    # matching GitdBucket.LifecycleConfiguration in cloudformation/stack.yaml
+    # (lines 185-194). Each rule carries an explicit empty Filter (whole-bucket):
+    # S3's published schema requires every rule to have Filter or the deprecated
+    # Prefix — a rule with neither is rejected with MalformedXML.
+    lifecycle_config='{
+        "Rules": [
+            {
+                "ID": "NoncurrentExpire30d",
+                "Status": "Enabled",
+                "Filter": {},
+                "NoncurrentVersionExpiration": { "NoncurrentDays": 30 }
+            },
+            {
+                "ID": "AbortIncompleteMultipartUpload7d",
+                "Status": "Enabled",
+                "Filter": {},
+                "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+            }
+        ]
+    }'
+
+    # Parse the JSON at the boundary (parse, don't validate) so a malformed
+    # body fails here with a clear message instead of a cryptic MalformedXML
+    # from S3. Under pipefail, a python3 parse failure trips the guard.
+    printf '%s\n' "${lifecycle_config}" | python3 -m json.tool >/dev/null 2>&1 \
+        || die "lifecycle configuration JSON is malformed; fix create-bucket.sh before re-running"
+
     aws s3api put-bucket-lifecycle-configuration \
         --bucket "${BUCKET}" \
         --region "${REGION}" \
-        --lifecycle-configuration '{
-            "Rules": [
-                {
-                    "ID": "NoncurrentExpire30d",
-                    "Status": "Enabled",
-                    "NoncurrentVersionExpiration": { "NoncurrentDays": 30 }
-                },
-                {
-                    "ID": "AbortIncompleteMultipartUpload7d",
-                    "Status": "Enabled",
-                    "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
-                }
-            ]
-        }' \
+        --lifecycle-configuration "${lifecycle_config}" \
         || die "failed to set the lifecycle configuration on s3://${BUCKET}"
     echo "gitd: create-bucket: set lifecycle configuration on s3://${BUCKET}"
     CHANGES_APPLIED=true
