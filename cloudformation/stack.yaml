@@ -162,35 +162,6 @@ Resources:
         - Key: Name
           Value: gitd-sg
 
-  # --- S3 bucket: artifacts + repos + bundles ------------------------------------
-  GitdBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Ref BucketName
-      VersioningConfiguration:
-        Status: Enabled                       # noncurrent versions expire 30d (R12-Q9)
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        IgnorePublicAcls: true
-        BlockPublicPolicy: true
-        RestrictPublicBuckets: true
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256            # SSE-S3 (R2-Q9)
-      LifecycleConfiguration:
-        Rules:
-          - Id: NoncurrentExpire30d
-            Status: Enabled
-            NoncurrentVersionExpiration:
-              NoncurrentDays: 30
-          - Id: AbortIncompleteMultipartUpload7d
-            Status: Enabled
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 7          # belt-and-braces (R12-Q9)
-
   # --- IAM instance role -----------------------------------------------------------
   GitdInstanceRole:
     Type: AWS::IAM::Role
@@ -252,7 +223,7 @@ Resources:
       Roles:
         - !Ref GitdInstanceRole
 
-  # --- launch config: BootMode uefi (Secure Boot, R6-Q4) + IMDSv2 required -------
+  # --- launch config: IMDSv2 required (Graviton AL2023 enforces UEFI Secure Boot) --
   GitdLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -261,7 +232,6 @@ Resources:
         ImageId: !Ref AmiId
         InstanceType: !Ref InstanceType
         KeyName: !Ref KeyName
-        BootMode: uefi                            # Graviton AL2023 enforces UEFI Secure Boot
         MetadataOptions:
           HttpTokens: required                    # IMDSv2 only (R7-Q6)
           HttpEndpoint: enabled
@@ -334,7 +304,7 @@ Resources:
   # --- the instance (boot signal gates CREATE_COMPLETE) ---------------------------
   GitdInstance:
     Type: AWS::EC2::Instance
-    DependsOn: [PublicRoute, GitdBucket]
+    DependsOn: [PublicRoute]
     CreationPolicy:
       ResourceSignal:
         Count: 1
@@ -361,4 +331,4 @@ Outputs:
     Value: !Select [0, !Split ["/", !GetAtt GitdInstance.PublicIp]]
   GitdBucket:
     Description: S3 bucket
-    Value: !Ref GitdBucket
+    Value: !Ref BucketName
