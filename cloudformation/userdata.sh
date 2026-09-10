@@ -717,6 +717,12 @@ dump_sshd_diagnostics() {
     echo "gitd: userdata: ----- sshd_config on host -----"
     ls -l /etc/gitd/sshd_config 2>/dev/null || echo "(no /etc/gitd/sshd_config)"
     head -n 30 /etc/gitd/sshd_config 2>/dev/null || echo "(cannot read /etc/gitd/sshd_config)"
+    echo "gitd: userdata: ----- revoked_keys on host -----"
+    cat /etc/gitd/revoked_keys 2>&1 || echo "(revoked_keys unreadable or empty)"
+    echo "gitd: userdata: ----- auth_principals/git on host -----"
+    cat /etc/gitd/auth_principals/git 2>&1 || echo "(auth_principals/git unreadable or empty)"
+    echo "gitd: userdata: ----- auth_principals/admin on host -----"
+    cat /etc/gitd/auth_principals/admin 2>&1 || echo "(auth_principals/admin unreadable or empty)"
     echo "gitd: userdata: ----- in-container sshd config parse -----"
     # Best-effort (informational): exec a config test inside the running sshd
     # container. Requires the container task to be up; a failure is not fatal —
