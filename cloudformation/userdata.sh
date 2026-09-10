@@ -351,7 +351,11 @@ chmod 0644 /etc/gitd/tls/probe.crt \
            /etc/gitd/trusted_user_ca_keys.pem \
            /etc/gitd/sshd_config
 chown -R root:root /etc/gitd/auth_principals
-chmod -R 0644 /etc/gitd/auth_principals
+# auth_principals is a DIRECTORY: 0644 (from -R) would strip the execute bit, so
+# the git user could not traverse it to read its principals file. sshd reads
+# AuthorizedPrincipalsFile as the authenticating user, so the dir must be
+# traversable (0755) while the principal files stay world-readable (0644).
+chmod -R u=rwX,go=rX /etc/gitd/auth_principals
 chown root:root /etc/gitd/revoked_keys && chmod 0644 /etc/gitd/revoked_keys
 
 echo "gitd: userdata: fetching/verifying/importing OCI image"
