@@ -140,6 +140,9 @@ REPO_REF_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 verify_artifact "${IMAGE_TAR}" "${SIGNING_KEY}"
 
 # --- build the deployment bundle (R13-Q4: configs written verbatim at boot) ---------
+# Ensure the bundle staging dir exists before mktemp creates its temp dir inside
+# it (cloudformation/out is gitignored and absent on a fresh checkout).
+mkdir -p "${BUNDLE_DIR}"
 STAGE="$(mktemp -d "${BUNDLE_DIR}/bundle.XXXXXX")"
 trap 'rm -rf "${STAGE}"' EXIT
 mkdir -p "${STAGE}"
@@ -162,7 +165,6 @@ cp "${SIGNING_KEY}"                                         "${STAGE}/gitd-signi
 cp "${SCRIPT_DIR}/../tools/release/sign-artifact.sh"        "${STAGE}/sign-artifact.sh"
 
 BUNDLE_TAR="${BUNDLE_DIR}/gitd-bundle.tar.gz"
-mkdir -p "${BUNDLE_DIR}"
 tar -C "${STAGE}" --sort=name --owner=0 --group=0 --numeric-owner \
     -czf "${BUNDLE_TAR}" .
 BUNDLE_SHA256="$(sha256sum "${BUNDLE_TAR}" | cut -d' ' -f1)"
