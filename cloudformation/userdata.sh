@@ -290,6 +290,16 @@ Match User git
     PermitTTY no
 SSHD_EOF
 
+# Fail-fast (code-philosophy): a host sshd_config that cannot parse can never open
+# :22, so abort boot immediately. The authoritative `sshd -t` runs inside the sshd
+# container; the host may not carry an sshd binary, so a missing one is tolerated
+# (the container-side parse is surfaced by dump_sshd_diagnostics).
+if command -v sshd >/dev/null 2>&1; then
+    sshd -t -f /etc/gitd/sshd_config || die "host sshd rejected /etc/gitd/sshd_config"
+else
+    echo "gitd: userdata: host has no sshd binary; skipping host-side config parse (container-side -t is authoritative)"
+fi
+
 # Per-user CA principals (R2-Q14): admin cert carries principals git,admin;
 # git cert carries principal git.
 printf 'git,admin\n' > /etc/gitd/auth_principals/admin
@@ -667,6 +677,47 @@ fail_unit_diagnostics() {
     dump_unit_diagnostics "${unit}"
     die "${unit} did not start"
 }
+# sshd-specific boot diagnostics (code-philosophy: fail-loud). systemd seeing the
+# `ctr run` wrapper alive does NOT prove the in-container sshd parsed its config,
+# bound, and stayed LISTENING on :22. These probes surface sshd's real state so a
+# boot that loses sshd carries the evidence; every probe is guarded (|| echo/|| true)
+# so one failure never masks another. Also run right after the liveness probe as a
+# positive confirmation that sshd was still listening at boot-complete time.
+dump_sshd_diagnostics() {
+    echo "gitd: userdata: ----- gitd-sshd.service journal (last 40) -----"
+    journalctl -u gitd-sshd.service --no-pager -n 40 2>/dev/null || echo "(no gitd-sshd journal)"
+    echo "gitd: userdata: ----- gitd-sshd.service status -----"
+    systemctl status gitd-sshd.service --no-pager 2>/dev/null || true
+    echo "gitd: userdata: ----- :22/:443 listener on host -----"
+    if command -v ss >/dev/null 2>&1; then
+        ss -tlnp 2>/dev/null | grep -E ':(22|443)\b' || echo "(no :22/:443 listener)"
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -tlnp 2>/dev/null | grep -E ':(22|443)\b' || echo "(no :22/:443 listener)"
+    else
+        echo "(neither ss nor netstat available; cannot check :22/:443)"
+    fi
+    echo "gitd: userdata: ----- containerd containers -----"
+    ctr -n default containers ls 2>/dev/null || echo "(ctr containers ls failed)"
+    echo "gitd: userdata: ----- containerd tasks -----"
+    ctr -n default tasks ls 2>/dev/null || echo "(ctr tasks ls failed)"
+    echo "gitd: userdata: ----- containerd task ps gitd-sshd -----"
+    ctr -n default tasks ps gitd-sshd 2>/dev/null || echo "(ctr tasks ps gitd-sshd failed)"
+    echo "gitd: userdata: ----- sshd/ctr gitd procs -----"
+    ps aux | grep -E '[s]shd|[g]itd-sshd|[c]tr run' || echo "(no sshd/ctr gitd process)"
+    echo "gitd: userdata: ----- sshd_config on host -----"
+    ls -l /etc/gitd/sshd_config 2>/dev/null || echo "(no /etc/gitd/sshd_config)"
+    head -n 30 /etc/gitd/sshd_config 2>/dev/null || echo "(cannot read /etc/gitd/sshd_config)"
+    echo "gitd: userdata: ----- in-container sshd config parse -----"
+    # Best-effort (informational): exec a config test inside the running sshd
+    # container. Requires the container task to be up; a failure is not fatal —
+    # the listener + journal probes above are authoritative.
+    ctr -n default tasks exec --exec-id sshd-t gitd-sshd /usr/local/bin/sshd -t -f /etc/ssh/sshd_config 2>&1 \
+        || echo "(in-container sshd -t not available)"
+}
+fail_sshd_diagnostics() {
+    dump_sshd_diagnostics
+    die "gitd-sshd.service did not remain active"
+}
 # Poll serve + sshd together: sshd is ordered After=gitd-serve, so a single
 # is-active check on sshd right after serve comes up would race sshd's start.
 for _ in $(seq 1 30); do
@@ -675,7 +726,7 @@ for _ in $(seq 1 30); do
     sleep 2
 done
 systemctl is-active --quiet gitd-serve.service || fail_unit_diagnostics gitd-serve.service
-systemctl is-active --quiet gitd-sshd.service || fail_unit_diagnostics gitd-sshd.service
+systemctl is-active --quiet gitd-sshd.service || fail_sshd_diagnostics
 
 # mTLS probe against the browse UI using the probe client cert from SSM. Resolve
 # the hostname to loopback so the server cert (CN=git.cmposer.cc) verifies and
@@ -690,6 +741,11 @@ curl --fail --silent --show-error \
     "https://git.cmposer.cc/" >/dev/null \
     || { dump_unit_diagnostics gitd-serve.service; die "browse mTLS liveness probe failed"; }
 
+# Positive confirmation (code-philosophy: fail-loud, not silent): after the mTLS
+# probe passes, dump sshd diagnostics so the boot log records that sshd was in
+# fact LISTENING on :22 at boot-complete time — directly addressing "did sshd
+# remain open after cloud-init".
+dump_sshd_diagnostics
 echo "gitd: userdata: boot complete; git.cmposer.cc is up"
 
 # --- signal boot success (R7-Q6 creation policy) -------------------------------------
