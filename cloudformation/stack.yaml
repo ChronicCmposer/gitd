@@ -252,7 +252,7 @@ Resources:
             - |
               #!/bin/bash
               set -euo pipefail
-              exec >/var/log/gitd-userdata.log 2>&1
+              exec > >(tee /var/log/gitd-userdata.log) 2>&1
               trap 'echo "gitd: bootstrap: ERROR at line \$LINENO (last command: \$BASH_COMMAND)" >&2' ERR
 
               # Minimal bootstrap: install AWS helpers, pull the deployment
