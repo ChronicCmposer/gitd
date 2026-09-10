@@ -302,10 +302,11 @@ else
 fi
 
 # Per-user CA principals (R2-Q14): admin cert carries principals git,admin;
-# git cert carries principal git. AuthorizedPrincipalsFile is whitespace-/
-# newline-delimited, so principals are space-separated here — a comma would
-# yield one literal principal "git,admin" matching neither.
-printf 'git admin\n' > /etc/gitd/auth_principals/admin
+# git cert carries principal git. AuthorizedPrincipalsFile is line-per-principal:
+# each line is exactly one principal — whitespace and commas are NOT delimiters,
+# so a space or comma on a line yields one literal principal matching neither.
+# One principal per line below.
+printf 'admin\ngit\n' > /etc/gitd/auth_principals/admin
 printf 'git\n' > /etc/gitd/auth_principals/git
 : > /etc/gitd/revoked_keys
 
