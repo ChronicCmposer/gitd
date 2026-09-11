@@ -113,7 +113,6 @@ var fragTmpl = template.Must(template.New("fragments").Funcs(template.FuncMap{
 <div class="empty-repo"><p>no repositories yet.</p><p>create one with <code>git init --bare</code> or push to a new name.</p></div>
 {{end}}
 </div>
-<div class="footer">gitd — personal git server · mTLS browse</div>
 {{end}}
 
 {{define "refbar"}}

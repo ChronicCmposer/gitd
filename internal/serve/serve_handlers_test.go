@@ -313,6 +313,89 @@ func TestHandleRestoreVerifyFailure(t *testing.T) {
 	}
 }
 
+func TestHandleDeleteInvalidRepo(t *testing.T) {
+	srv, _, _ := testServe(t, nil)
+	rec := doRequest(t, srv, http.MethodPost, "/v1/delete", `{"repo":".bad"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid repo status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleDeleteBadJSON(t *testing.T) {
+	srv, _, _ := testServe(t, nil)
+	rec := doRequest(t, srv, http.MethodPost, "/v1/delete", `{"repo":`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad json status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleDeleteBusy(t *testing.T) {
+	srv, _, _ := testServe(t, nil)
+	restore := TestSetSubmitWait(5 * time.Millisecond)
+	defer restore()
+	for i := 0; i < 64; i++ {
+		srv.actions <- func(*Serve) {}
+	}
+	rec := doRequest(t, srv, http.MethodPost, "/v1/delete", `{"repo":"r"}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("busy status = %d, want 503 (R12-Q1)", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "busy") {
+		t.Errorf("busy body = %q", rec.Body.String())
+	}
+}
+
+// TestHandleDeleteOK dispatches to a REAL mirror-agent: serve stages the
+// delete job, the agent removes the live repo, and serve replies 200 after
+// reading the result. S3 bundles are not consulted at all.
+func TestHandleDeleteOK(t *testing.T) {
+	srv, _, _, store := testServeStore(t, nil)
+	makeBareRepo(t, srv.reposRoot, "r")
+	srv.startWorker()
+	stopAgent := testRestoreAgent(t, srv, store)
+	defer stopAgent()
+
+	old := restoreResultDeadline
+	restoreResultDeadline = 15 * time.Second
+	defer func() { restoreResultDeadline = old }()
+
+	rec := doRequest(t, srv, http.MethodPost, "/v1/delete", `{"repo":"r"}`)
+	if rec.Code != http.StatusOK {
+		t.Errorf("delete status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(srv.reposRoot, "r.git")); !os.IsNotExist(err) {
+		t.Errorf("repo still present after delete: %v", err)
+	}
+	// Serve consumed the staged files after reading the result.
+	entries, err := os.ReadDir(srv.restoreDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("delete spool not cleaned: %v", entries)
+	}
+}
+
+func TestHandleDeleteAgentError(t *testing.T) {
+	// The agent reports a failure (e.g. the repo does not exist) in
+	// <id>.result: the handler must surface the agent's message as a non-2xx.
+	srv, _, _, _ := testServeStore(t, nil)
+	srv.startWorker()
+	go func() { _ = writeFakeRestoreResult(srv, `{"ok":false,"message":"no such repo"}`) }()
+
+	old := restoreResultDeadline
+	restoreResultDeadline = 5 * time.Second
+	defer func() { restoreResultDeadline = old }()
+
+	rec := doRequest(t, srv, http.MethodPost, "/v1/delete", `{"repo":"ghost"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("agent-error status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no such repo") {
+		t.Errorf("agent error body = %q, want it to surface the agent message", rec.Body.String())
+	}
+}
+
 func TestSweepRestoreSpoolRemovesLeftovers(t *testing.T) {
 	srv, _, _ := testServe(t, nil)
 	if err := os.MkdirAll(srv.restoreDir, 0o770); err != nil {

@@ -23,6 +23,7 @@ go_library(
         "//internal/gitenv",
         "//internal/repo",
         "//internal/serve",
+        "//internal/version",
         "@com_github_alecthomas_chroma_v2//:chroma",
         "@com_github_alecthomas_chroma_v2//formatters/html",
         "@com_github_alecthomas_chroma_v2//lexers",
@@ -48,5 +49,6 @@ go_test(
         "//internal/objectstore",
         "//internal/serve",
         "//internal/spool",
+        "//internal/version",
     ],
 )

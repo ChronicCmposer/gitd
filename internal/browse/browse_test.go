@@ -23,6 +23,7 @@ import (
 	"github.com/ChronicCmposer/gitd/internal/objectstore"
 	"github.com/ChronicCmposer/gitd/internal/serve"
 	"github.com/ChronicCmposer/gitd/internal/spool"
+	"github.com/ChronicCmposer/gitd/internal/version"
 )
 
 const gitBin = "/usr/bin/git"
@@ -359,9 +360,11 @@ func TestClientRenderModeServesAssets(t *testing.T) {
 }
 
 func TestStyleSheetPureBlackAppCanvas(t *testing.T) {
-	// The page canvas is pure black (--bg-app #000000) while the Gruvbox
-	// surfaces stay on bg0: the served stylesheet must declare the app
-	// background, apply it to the body, and keep the two depth gradients.
+	// The page canvas is pure black (--bg-app #000000) and the primary
+	// surfaces are pure black too (--bg0 #000000) while --bg1 stays the
+	// elevated tone: the served stylesheet must declare both backgrounds,
+	// apply the app background to the body, keep the two depth gradients,
+	// and override the vendored #282828 code-token containers.
 	h := testHandler(t, "server", nil)
 	rec := get(t, h, "/static/style.css")
 	if rec.Code != http.StatusOK {
@@ -369,13 +372,42 @@ func TestStyleSheetPureBlackAppCanvas(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
+		"--bg0: #000000",
 		"--bg-app: #000000",
 		"var(--bg-app)",
 		"rgba(131,165,152,0.08)", // blue depth wash kept
 		"rgba(254,128,25,0.06)",  // orange depth wash kept
+		"pre.chroma, pre.hljs, .chroma, .hljs, .bg",
+		"background-color: #000000",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("style.css missing %q", want)
+		}
+	}
+	if strings.Contains(body, "--bg0: #282828") {
+		t.Errorf("style.css still declares the old bg0 (#282828)")
+	}
+}
+
+func TestFooterOnEveryPage(t *testing.T) {
+	// The version footer is part of the page shell (layoutTmpl), so it
+	// appears on every page exactly once — the old index-only .footer
+	// fragment is gone (no doubled footer). In tests version.String() is the
+	// v0.0.0-devel default.
+	h := testHandler(t, "server", nil)
+	makeRepo(t, h.reposRoot, "repo1")
+	wantFooter := `<footer class="footer">gitd — personal git server · mTLS browse · ` + version.String() + `</footer>`
+	for _, path := range []string{"/", "/repo1", "/repo1/log?ref=main", "/repo1/tree?ref=main"} {
+		rec := get(t, h, path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d, want 200", path, rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, wantFooter) {
+			t.Errorf("%s missing version footer %q", path, wantFooter)
+		}
+		if got := strings.Count(body, "personal git server"); got != 1 {
+			t.Errorf("%s 'personal git server' count = %d, want exactly 1 (no doubled footer)", path, got)
 		}
 	}
 }

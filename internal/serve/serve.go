@@ -5,14 +5,14 @@
 //
 // Delivery executes through the injected Deliver seam (a func built from the
 // webhook plugin registry); unknown plugin-ids reply 404-style (R13-Q8). The
-// control mux (/v1/bundle, /v1/deliver, /v1/restore) is served on the unix
-// socket; the browse :443 mux mounts only /v1/bundle + /v1/deliver (Phase 5),
-// so /v1/restore stays socket-only. Restore is dispatched to the git-context
-// mirror-agent via the /var/spool/gitd/restore job spool — serve never
-// writes /srv/git (its container mounts it ro and lacks CAP_CHOWN); see
-// mirror.Agent. All channel submissions wait up to 10s for a slot then
-// reply 503 busy (R12-Q1); notify's 60s socket client timeout (R11-Q3) is the
-// outer bound.
+// control mux (/v1/bundle, /v1/deliver, /v1/restore, /v1/delete) is served on
+// the unix socket; the browse :443 mux mounts only /v1/bundle + /v1/deliver
+// (Phase 5), so /v1/restore and /v1/delete stay socket-only. Restore and
+// delete are dispatched to the git-context mirror-agent via the
+// /var/spool/gitd/restore job spool — serve never writes /srv/git (its
+// container mounts it ro and lacks CAP_CHOWN); see mirror.Agent. All channel
+// submissions wait up to 10s for a slot then reply 503 busy (R12-Q1); notify's
+// 60s socket client timeout (R11-Q3) is the outer bound.
 package serve
 
 import (
@@ -197,12 +197,12 @@ func (s *Serve) Run(ctx context.Context) error {
 func (s *Serve) Submit(act func(*Serve)) error { return s.submit(act) }
 
 // SocketHandler returns the mux for the socket control endpoints (/v1/bundle,
-// /v1/deliver, /v1/restore). It is mounted on the unix-socket server (Run)
-// and, at only the /v1/bundle + /v1/deliver paths, behind the browse :443 mux
-// (Phase 5) — /v1/restore is deliberately socket-only: the restore staging
-// path (serve dispatching to the git-context agent) is never reachable from
-// :443. Both paths keep the actions-channel discipline and the R13-Q9
-// read-header/body caps.
+// /v1/deliver, /v1/restore, /v1/delete). It is mounted on the unix-socket
+// server (Run) and, at only the /v1/bundle + /v1/deliver paths, behind the
+// browse :443 mux (Phase 5) — /v1/restore and /v1/delete are deliberately
+// socket-only: the staging paths (serve dispatching to the git-context agent)
+// are never reachable from :443. Both paths keep the actions-channel
+// discipline and the R13-Q9 read-header/body caps.
 func (s *Serve) SocketHandler() http.Handler { return s.handler() }
 
 // submit queues act for the worker, waiting up to submitWait (R12-Q1). It
@@ -438,8 +438,9 @@ func (s *Serve) stageRestoreJob(repoName string) (string, error) {
 
 // waitRestoreResult polls the spool for <id>.result up to
 // restoreResultDeadline. It returns the agent's outcome; a timeout reports
-// that the restore is still in progress — the agent completes it regardless
-// and serve's startup sweep handles the leftover files.
+// that the job is still in progress — the agent completes it regardless and
+// serve's startup sweep handles the leftover files. Shared by restore and
+// delete (both stage <id>.request and read <id>.result).
 func (s *Serve) waitRestoreResult(id string) (*mirror.JobResult, error) {
 	resultPath := filepath.Join(s.restoreDir, id+mirror.JobResultExt)
 	deadline := time.After(restoreResultDeadline)
@@ -448,18 +449,18 @@ func (s *Serve) waitRestoreResult(id string) (*mirror.JobResult, error) {
 	for {
 		select {
 		case <-deadline:
-			return nil, fmt.Errorf("restore still in progress (mirror-agent slow); the agent will complete it and serve's startup sweep handles leftovers")
+			return nil, fmt.Errorf("job still in progress (mirror-agent slow); the agent will complete it and serve's startup sweep handles leftovers")
 		case <-ticker.C:
 			data, err := os.ReadFile(resultPath)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			if err != nil {
-				return nil, fmt.Errorf("read restore result: %w", err)
+				return nil, fmt.Errorf("read job result: %w", err)
 			}
 			res, err := mirror.DecodeJobResult(data)
 			if err != nil {
-				return nil, fmt.Errorf("decode restore result: %w", err)
+				return nil, fmt.Errorf("decode job result: %w", err)
 			}
 			return res, nil
 		}
@@ -544,6 +545,7 @@ func (s *Serve) handler() http.Handler {
 	mux.HandleFunc("/v1/bundle", s.handleBundle)
 	mux.HandleFunc("/v1/deliver", s.handleDeliver)
 	mux.HandleFunc("/v1/restore", s.handleRestore)
+	mux.HandleFunc("/v1/delete", s.handleDelete)
 	return mux
 }
 
@@ -696,6 +698,93 @@ func (s *Serve) handleRestore(w http.ResponseWriter, r *http.Request) {
 	s.cleanupRestoreJob(staged.id)
 	if !res.OK {
 		writeServeError(w, fmt.Errorf("restore failed: %s", res.Message))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// stageDeleteJob stages a delete job for the mirror-agent and returns the job
+// id. A delete needs no bundle (nothing to download or verify), so the job is
+// just the <id>.request envelope. It runs inside the worker (serialized with
+// all other serve work) and never writes the repo store: the gitd-restore
+// agent performs the /srv/git removal.
+func (s *Serve) stageDeleteJob(repoName string) (string, error) {
+	id, err := spool.NewID()
+	if err != nil {
+		return "", fmt.Errorf("serve: delete %s: job id: %w", repoName, err)
+	}
+	if err := os.MkdirAll(s.restoreDir, 0o770); err != nil {
+		return "", fmt.Errorf("serve: delete %s: mkdir %s: %w", repoName, s.restoreDir, err)
+	}
+	reqData, err := json.Marshal(mirror.JobRequest{Type: "delete", Repo: repoName})
+	if err != nil {
+		return "", fmt.Errorf("serve: delete %s: encode request: %w", repoName, err)
+	}
+	// The request is written atomically (temp + rename) so the agent's
+	// watcher never sees a half-written job.
+	if err := mirror.WriteJobFile(s.restoreDir, id+mirror.JobRequestExt, reqData, 0o644); err != nil {
+		return "", fmt.Errorf("serve: delete %s: stage request: %w", repoName, err)
+	}
+	s.log.Info("delete job staged for mirror-agent", "repo", repoName, "id", id)
+	return id, nil
+}
+
+// handleDelete serves POST /v1/delete: serve stages a delete job for the
+// git-context mirror-agent (no bundle — a delete has nothing to download or
+// verify), waits for the agent's <id>.result under restoreResultDeadline, and
+// cleans up the staged files. The agent removes /srv/git/<repo>.git ONLY; S3
+// bundle mirrors are never touched, so the repo stays restorable via gitd
+// mirror restore. Socket-only (never mounted behind the browse :443 mux),
+// matching /v1/restore. 200 on success; 400 invalid repo / bad body; 503 busy
+// when the channel is full (R12-Q1); staging/agent failures and the timeout
+// surface as non-2xx with a clear message.
+func (s *Serve) handleDelete(w http.ResponseWriter, r *http.Request) {
+	var req socket.DeleteRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !repo.ValidName(req.Repo) {
+		http.Error(w, "invalid repo name", http.StatusBadRequest)
+		return
+	}
+
+	// Staging runs inside the worker (serialized with all other serve work);
+	// the result wait runs in the request goroutine so the worker stays free
+	// for bundles/deliveries while the agent works.
+	reply := make(chan restoreStageResult, 1)
+	act := func(sv *Serve) {
+		jobID, err := sv.stageDeleteJob(req.Repo)
+		reply <- restoreStageResult{id: jobID, err: err}
+	}
+	if err := s.submit(act); err != nil {
+		writeServeError(w, err)
+		return
+	}
+	var staged restoreStageResult
+	select {
+	case staged = <-reply:
+	case <-r.Context().Done():
+		// Client disconnected; the staging action still completes and the
+		// buffered reply is discarded.
+		return
+	}
+	if staged.err != nil {
+		writeServeError(w, staged.err)
+		return
+	}
+
+	res, err := s.waitRestoreResult(staged.id)
+	if err != nil {
+		// Timeout / unreadable result: leave the staged files in place — the
+		// agent still completes the delete and serve's startup sweep handles
+		// leftovers.
+		writeServeError(w, err)
+		return
+	}
+	s.cleanupRestoreJob(staged.id)
+	if !res.OK {
+		writeServeError(w, fmt.Errorf("delete failed: %s", res.Message))
 		return
 	}
 	w.WriteHeader(http.StatusOK)

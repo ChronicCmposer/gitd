@@ -45,6 +45,7 @@ var commands = []command{
 	{name: "spool", summary: "inspect, replay, and purge the webhook event spool", run: runSpool},
 	{name: "ddns", summary: "refresh the dynamic DNS record", run: runDDNS},
 	{name: "mirror", summary: "inspect and manage S3 bundle mirrors", run: runMirror},
+	{name: "repo", summary: "manage live repositories under /srv/git", run: runRepo},
 	{name: "mirror-agent", summary: "restore agent daemon (background role; runs in the gitd-restore container)", run: runMirrorAgent},
 	{name: "version", summary: "print the gitd version", run: runVersion},
 }

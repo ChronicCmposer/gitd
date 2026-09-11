@@ -117,6 +117,173 @@ func noResult(t *testing.T, workDir, id string) {
 	}
 }
 
+// makeBareDir creates a bare-layout dir (HEAD, objects/, refs/) at
+// root/name.git without needing git — enough for delete jobs, which only
+// inspect the bare layout before removing.
+func makeBareDir(t *testing.T, root, name string) {
+	t.Helper()
+	dir := filepath.Join(root, name+".git")
+	for _, sub := range []string{"HEAD", "objects", "refs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// stageDeleteJob writes a {"type":"delete","repo":...} job request into the
+// spool the way serve would (no bundle: a delete has nothing to stage).
+func stageDeleteJob(t *testing.T, workDir, id, repo string) {
+	t.Helper()
+	req := []byte(`{"type":"delete","repo":` + strconvQuote(repo) + `}`)
+	if err := WriteJobFile(workDir, id+JobRequestExt, req, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentDeleteRemovesBareRepo(t *testing.T) {
+	m := testAgentMirror(t, objectstore.NewMemoryStore())
+	makeBareDir(t, m.reposRoot, "r")
+	workDir := t.TempDir()
+	stageDeleteJob(t, workDir, "del1", "r")
+	a := testAgent(t, m, workDir)
+	a.processJob(context.Background(), "del1")
+
+	res := readResult(t, workDir, "del1")
+	if !res.OK || res.Message != "repo deleted" {
+		t.Errorf("result = %+v, want ok 'repo deleted'", res)
+	}
+	if _, err := os.Stat(filepath.Join(m.reposRoot, "r.git")); !os.IsNotExist(err) {
+		t.Errorf("repo still present after delete: %v", err)
+	}
+	// The agent consumed the request (and tolerated the absent bundle).
+	if _, err := os.Stat(filepath.Join(workDir, "del1"+JobRequestExt)); !os.IsNotExist(err) {
+		t.Errorf("request not consumed after delete")
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "del1"+JobResultExt)); err != nil {
+		t.Errorf("result missing (serve owns that cleanup): %v", err)
+	}
+}
+
+func TestAgentDeleteMissingRepoFails(t *testing.T) {
+	m := testAgentMirror(t, objectstore.NewMemoryStore())
+	workDir := t.TempDir()
+	stageDeleteJob(t, workDir, "del2", "ghost")
+	a := testAgent(t, m, workDir)
+	a.processJob(context.Background(), "del2")
+
+	res := readResult(t, workDir, "del2")
+	if res.OK {
+		t.Errorf("result = %+v, want failure for missing repo", res)
+	}
+	entries, err := os.ReadDir(m.reposRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("reposRoot has entries after missing-repo delete: %v", entries)
+	}
+}
+
+func TestAgentDeleteNonBarePathFails(t *testing.T) {
+	m := testAgentMirror(t, objectstore.NewMemoryStore())
+	dir := filepath.Join(m.reposRoot, "r.git")
+	if err := os.MkdirAll(filepath.Join(dir, "worktree"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workDir := t.TempDir()
+	stageDeleteJob(t, workDir, "del3", "r")
+	a := testAgent(t, m, workDir)
+	a.processJob(context.Background(), "del3")
+
+	res := readResult(t, workDir, "del3")
+	if res.OK || !strings.Contains(res.Message, "not a bare git repository") {
+		t.Errorf("result = %+v, want not-bare error", res)
+	}
+	// The non-bare path is left untouched.
+	if _, err := os.Stat(filepath.Join(dir, "worktree")); err != nil {
+		t.Errorf("non-bare path removed: %v", err)
+	}
+}
+
+func TestAgentDeleteInvalidRepoNameRefused(t *testing.T) {
+	m := testAgentMirror(t, objectstore.NewMemoryStore())
+	workDir := t.TempDir()
+	stageDeleteJob(t, workDir, "del4", "../escape")
+	a := testAgent(t, m, workDir)
+	a.processJob(context.Background(), "del4")
+
+	res := readResult(t, workDir, "del4")
+	if res.OK || !strings.Contains(res.Message, "invalid repo name") {
+		t.Errorf("result = %+v, want invalid-repo-name error", res)
+	}
+	entries, err := os.ReadDir(m.reposRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("reposRoot has entries after traversal delete: %v", entries)
+	}
+}
+
+func TestAgentDeleteRefusesSymlinkEscape(t *testing.T) {
+	// A repo dir that is a symlink pointing outside reposRoot must be
+	// refused (RealpathUnder escape guard), never RemoveAll'd through.
+	outside := t.TempDir()
+	m := testAgentMirror(t, objectstore.NewMemoryStore())
+	if err := os.Symlink(outside, filepath.Join(m.reposRoot, "r.git")); err != nil {
+		t.Fatal(err)
+	}
+	workDir := t.TempDir()
+	stageDeleteJob(t, workDir, "del5", "r")
+	a := testAgent(t, m, workDir)
+	a.processJob(context.Background(), "del5")
+
+	res := readResult(t, workDir, "del5")
+	if res.OK || !strings.Contains(res.Message, "escapes") {
+		t.Errorf("result = %+v, want escape refusal", res)
+	}
+	// Nothing was removed: the link is still there and the outside dir still
+	// has its contents.
+	if _, err := os.Lstat(filepath.Join(m.reposRoot, "r.git")); err != nil {
+		t.Errorf("symlink removed despite refusal: %v", err)
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Errorf("outside dir touched by refused delete: %v, %v", entries, err)
+	}
+}
+
+func TestJobRequestEmptyTypeDefaultsToRestore(t *testing.T) {
+	// Legacy restore jobs predate the type field: an empty Type must decode
+	// and dispatch to the restore path (serve writes no type for restores).
+	req, err := DecodeJobRequest([]byte(`{"repo":"r","bundle":"j.bundle"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Type != "" || req.Repo != "r" || req.Bundle != "j.bundle" {
+		t.Errorf("decoded = %+v, want Type \"\" Repo r Bundle j.bundle", req)
+	}
+	// And a real agent run: a no-type restore job re-creates the repo from
+	// its staged bundle (back-compat with in-flight restore jobs).
+	store := objectstore.NewMemoryStore()
+	m := testAgentMirror(t, store)
+	data := seedBundle(t, m, "r")
+	if err := os.RemoveAll(filepath.Join(m.reposRoot, "r.git")); err != nil {
+		t.Fatal(err)
+	}
+	workDir := t.TempDir()
+	stageJob(t, workDir, "legacy", data, "r") // no "type" field
+	a := testAgent(t, m, workDir)
+	a.processJob(context.Background(), "legacy")
+
+	res := readResult(t, workDir, "legacy")
+	if !res.OK {
+		t.Errorf("legacy restore result = %+v, want ok", res)
+	}
+	if _, err := os.Stat(filepath.Join(m.reposRoot, "r.git")); err != nil {
+		t.Errorf("legacy restore did not recreate the repo: %v", err)
+	}
+}
+
 func TestAgentProcessesExistingJobsOnStartup(t *testing.T) {
 	store := objectstore.NewMemoryStore()
 	m := testAgentMirror(t, store)

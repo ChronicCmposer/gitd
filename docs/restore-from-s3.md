@@ -6,7 +6,9 @@ admin shell image has no `aws` CLI (R6-Q9), so every operation below runs via
 
 - Restoring a repo from its S3 bundle mirror (`gitd mirror restore <repo>`,
   R8-Q2/R11-Q5)
-- Deleting a repo outright (manual admin/host procedure, R5-Q10)
+- Deleting a repo — two orthogonal commands: `gitd repo delete --yes <repo>`
+  (live `/srv/git/<repo>.git`) and `gitd mirror delete <repo>` (S3 bundle
+  backups) (R5-Q10)
 
 ## 1. Restore a repo from S3
 
@@ -146,28 +148,49 @@ If you want an on-demand spot check, restore is itself a verify+restore, so a
 restore into a scratch dir is a manual verification path — but the weekly loop
 is the intended mechanism.
 
-## 3. Deleting a repository (manual, split-plane)
+## 3. Deleting a repository (two orthogonal commands)
 
-Repo deletion is deliberately **not** a `gitd` subcommand in v1 (R5-Q10). It is
-a manual two-part procedure. The purpose is to make deletion a conscious,
-audited action rather than an API footgun. The live repo lives on host storage
-(`/srv/git` is `0755 git:git`, so not even a `git` group member can write it
-from the container) while the bundles live in S3 — so the two halves split
-across planes:
+Repo deletion is two independent commands, one per layer:
+
+- `gitd repo delete --yes <repo>` removes the **live** repo at
+  `/srv/git/<repo>.git` — and only that. S3 bundle mirrors are retained, so
+  the repo can be recreated with `gitd mirror restore <repo>`.
+- `gitd mirror delete <repo>` removes the S3 bundle backups.
+
+Run both to fully remove a repo (live copy + backups). Run only the `repo
+delete` to drop the live copy while keeping the S3 mirror as a recoverable
+backup. Keeping deletion as two deliberate steps, rather than one API
+footgun, is a conscious, audited design choice (R5-Q10).
+
+The live repo lives on EBS-backed `/srv/git`, and `/srv/git` is `0755
+git:git` — not even a `git` group member can write it from the admin shell.
+Removing the live copy is therefore **serve-orchestrated + agent-executed**,
+exactly like restore: there is no host-plane `rm -rf` step anymore. The
+`gitd-restore` agent performs the `/srv/git` removal as the `git` user, and
+the admin never needs elevation.
 
 Steps, in order:
 
-1. Remove the local repo from the EBS store — **host plane** (SSM root shell,
-   where `/srv/git` is writable):
-   ```sh
-   # SSM Session Manager root shell (docs/admin-split.md)
-   rm -rf /srv/git/<repo>.git                     # remove the live repo
-   ```
-
-2. Remove the current bundle(s) from the S3 mirror — **data plane**, directly
-   as admin (S3 through the instance role; no sudo exists in the image):
+1. Remove the live repo from `/srv/git` — **data plane**, serve-orchestrated
+   (requires `gitd-serve` + `gitd-restore` running; the `--yes` gate is
+   mandatory):
    ```sh
    ssh git@git.cmposer.cc                        # admin shell
+   gitd repo delete --yes <repo>                 # removes /srv/git/<repo>.git only
+   ```
+   The CLI submits `POST /v1/delete` over the serve socket
+   (`/var/spool/gitd/gitd.sock`); serve validates the repo name and stages a
+   delete job in `/var/spool/gitd/restore/`; the `gitd-restore` agent
+   re-validates the name, resolves the target under `/srv/git`
+   (symlink-escape guard), confirms it is a bare repo, and removes exactly
+   `/srv/git/<repo>.git`. A missing repo or a non-bare path fails the job
+   (fail-fast) — never a no-op. S3 is never touched, so the bundles remain
+   and `gitd mirror restore <repo>` can recreate the repo later.
+
+2. Remove the current bundle(s) from the S3 mirror — optional, and **data
+   plane**, directly as admin (S3 through the instance role; no sudo exists
+   in the image). Skipping this step keeps the repo's S3 backup:
+   ```sh
    gitd mirror delete <repo>                      # deletes every current bundle
    ```
    `gitd mirror delete <repo>` lists the keys then deletes each via the
@@ -176,7 +199,8 @@ Steps, in order:
 
 3. Confirm:
    ```sh
-   gitd mirror list <repo>                        # → {repo, bundles:[]}
+   gitd repo list                                 # live repo gone from /srv/git
+   gitd mirror list <repo>                        # → {repo, bundles:[]} after step 2
    ```
 
 **Noncurrent versions expire naturally.** The bucket has a 30-day
@@ -188,16 +212,20 @@ keys.
 
 ### What this does / does not do
 
-- It does remove the live repo and its reachable mirror bundles, so the repo
-  is gone from both browse and push/pull after this procedure.
-- It does **not** interact with `gitd spool` — spool events for past pushes to
-  the repo remain until they deliver/die and the TTL/purge rules apply
+- `gitd repo delete` removes the live repo from `/srv/git`, so it stops
+  appearing in browse and push/pull immediately — but the S3 bundles survive,
+  and `gitd mirror restore <repo>` still recreates it.
+- `gitd mirror delete` removes the current bundle(s) from S3; a later
+  `gitd mirror restore <repo>` fails loudly ("no bundles") since there is
+  nothing to restore.
+- Neither command interacts with `gitd spool` — spool events for past pushes
+  to the repo remain until they deliver/die and the TTL/purge rules apply
   (R11-Q4). That is the audit trail, by design (R3-Q1: spool + S3 bundles are
   the audit trail).
 
 ### IAM in play
 
 The container talks to S3 only through the instance role, which grants
-`Put/List/Get/Delete` on `s3://<bucket>/repos/*` (R6-Q9). `mirror delete` and
-`mirror restore` both run entirely in-container via that role — no `aws` CLI,
-no extra creds (R7-Q3).
+`Put/List/Get/Delete` on `s3://<bucket>/repos/*` (R6-Q9). `repo delete`,
+`mirror delete` and `mirror restore` all run entirely in-container via that
+role — no `aws` CLI, no extra creds (R7-Q3).

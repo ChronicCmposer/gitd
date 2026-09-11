@@ -1,8 +1,9 @@
 // Package socket is the HTTP-over-unix-socket submission seam between gitd
-// subprocesses (notify, spool replay, mirror restore) and the gitd-serve
-// actions channel (R9-Q11, R10-Q2, R12-Q2). The server side (POST /v1/bundle,
-// POST /v1/deliver, POST /v1/restore) lives in internal/serve (Phase 4); this
-// client is the single submission path Phase 3 callers use.
+// subprocesses (notify, spool replay, mirror restore, repo delete) and the
+// gitd-serve actions channel (R9-Q11, R10-Q2, R12-Q2). The server side (POST
+// /v1/bundle, POST /v1/deliver, POST /v1/restore, POST /v1/delete) lives in
+// internal/serve (Phase 4); this client is the single submission path Phase 3
+// callers use.
 package socket
 
 import (
@@ -155,6 +156,40 @@ func (c *Client) Restore(ctx context.Context, repo string) error {
 	if resp.StatusCode != http.StatusOK {
 		reply, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return fmt.Errorf("socket /v1/restore: %s: %s", resp.Status, trim(string(reply)))
+	}
+	return nil
+}
+
+// DeleteRequest is the POST /v1/delete body (serve-orchestrated repo delete).
+type DeleteRequest struct {
+	Repo string `json:"repo"`
+}
+
+// DeleteRepo submits a synchronous repo delete of repo to serve over the
+// socket. Serve stages a delete job for the gitd-restore agent, which removes
+// /srv/git/<repo>.git as the git user — no admin elevation needed, and S3
+// bundle mirrors are left intact so the repo stays restorable via gitd mirror
+// restore. Any non-2xx reply is an error: the CLI surfaces it so the operator
+// knows the delete failed.
+func (c *Client) DeleteRepo(ctx context.Context, repo string) error {
+	body, err := json.Marshal(DeleteRequest{Repo: repo})
+	if err != nil {
+		return fmt.Errorf("socket delete: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://gitd/v1/delete", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("socket delete: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpc.Do(req)
+	if err != nil {
+		return fmt.Errorf("socket %s /v1/delete: %w", c.path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		reply, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("socket /v1/delete: %s: %s", resp.Status, trim(string(reply)))
 	}
 	return nil
 }

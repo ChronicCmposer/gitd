@@ -6,7 +6,7 @@ most useful thing for operating this server.
 
 | Plane | Reach | What it is for | Blocked from |
 |-------|-------|----------------|--------------|
-| **Data plane** — `ssh git@git.cmposer.cc` (admin cert) | The admin **fish** shell inside the sshd **container** | `gitd spool ...`, `gitd mirror ...`, `rm`/repo ops on `/srv/git` | The host OS, containerd, systemd |
+| **Data plane** — `ssh git@git.cmposer.cc` (admin cert) | The admin **fish** shell inside the sshd **container** | `gitd spool ...`, `gitd mirror ...`, `gitd repo ...` ops on `/srv/git` | The host OS, containerd, systemd |
 | **Host plane** — SSM Session Manager | A **root shell on the host** (AL2023) | `containerd`/`ctr`, `dnf`, `systemctl`, `journalctl` | Nothing on the host (it is root) |
 
 The git *gateway* user (`git`) is forced into `gitd serve` and never reaches a
@@ -22,11 +22,12 @@ through `gitd` subcommands — the container image has **no** `aws` CLI, so raw
 S3 is not an option in-container (R6-Q9). The image has **no `sudo` and no
 elevation path**: admin is a member of the `git` group (gid 1001), which
 grants read/write on the setgid `/var/spool/gitd` and connect access to the
-0770 `git:git` control socket — but never root. The only operation that must
-write `/srv/git`, `gitd mirror restore`, is **serve-orchestrated +
-agent-executed**: the CLI submits it over the control socket, serve stages a
-restore job, and the **`gitd-restore` agent** (a background container running
-as the `git` user with no elevated caps) performs the write.
+0770 `git:git` control socket — but never root. The operations that must
+write `/srv/git`, `gitd mirror restore` and `gitd repo delete --yes <repo>`,
+are **serve-orchestrated + agent-executed**: the CLI submits them over the
+control socket, serve stages a restore/delete job, and the **`gitd-restore`
+agent** (a background container running as the `git` user with no elevated
+caps) performs the write.
 
 ```sh
 # Admin cert (principals git,admin) over the dedicated ~/.ssh/gitd_ed25519 key.
@@ -46,6 +47,8 @@ gitd mirror list
 | `gitd mirror list [<repo>]` | admin, direct | List a repo's S3 bundles, or with no `<repo>` every repo that has mirrors — `{repo, bundles:[...]}`, one NDJSON object per repo (R13-Q6) |
 | `gitd mirror delete <repo>` | admin, direct | Delete a repo's current bundles from S3 (R6-Q9) |
 | `gitd mirror restore <repo>` | serve + `gitd-restore` agent (socket) | Restore `<repo>` from its latest bundle into `/srv/git/<repo>.git`; serve downloads + verifies the bundle and stages the job, the gitd-restore agent (running as `git`, no elevated caps) writes `/srv/git`, so the repo lands git-owned without admin elevation (R8-Q2, R11-Q5) |
+| `gitd repo list` | admin, direct | List the live bare repositories under `/srv/git` (read-only; one repo name per line, no config needed) |
+| `gitd repo delete --yes <repo>` | admin command → serve socket → `gitd-restore` agent | Remove `/srv/git/<repo>.git` from the live repo store ONLY — S3 bundle mirrors are retained, so the repo stays restorable via `gitd mirror restore <repo>`. Submitted over the serve socket (`POST /v1/delete`); serve stages a delete job and the `gitd-restore` agent (running as `git`, no elevated caps) performs the `/srv/git` removal. Requires `gitd-serve` + `gitd-restore` running and the mandatory `--yes` gate (R5-Q10) |
 
 > **`gitd mirror restore <repo>` is a serve socket operation.** The CLI
 > submits `POST /v1/restore` over `/var/spool/gitd/gitd.sock`; serve
@@ -67,11 +70,15 @@ gitd mirror list
   the admin user's own permissions: S3 goes through the instance role, and
   `/var/spool/gitd` is setgid `git` (2770) so admin (a `git` group member)
   reads the spool and connects to the control socket.
-- Hard repo deletion of the live `/srv/git/<repo>.git` is a **host-plane**
-  operation: `/srv/git` is `0755 git:git` (R5-Q4), so not even a `git` group
-  member can write it from the container. Remove the live repo from the SSM
-  host shell, then delete the S3 bundles with `gitd mirror delete <repo>`
-  from the data plane; see `docs/restore-from-s3.md`.
+- Deleting the live `/srv/git/<repo>.git` is `gitd repo delete --yes <repo>`,
+  serve-orchestrated + agent-executed exactly like restore: the CLI submits
+  `POST /v1/delete` over the socket, serve stages a delete job, and the
+  `gitd-restore` agent performs the `/srv/git` removal as `git`. `/srv/git`
+  is `0755 git:git` (R5-Q4) and is **still not writable by the admin's own
+  user** — the delete routes through the agent, so no host-plane `rm -rf` is
+  needed. S3 bundle mirrors are **retained** (the repo stays restorable via
+  `gitd mirror restore <repo>`) unless you also run `gitd mirror delete
+  <repo>`; see `docs/restore-from-s3.md`.
 
 ### `gitd` subcommand reference (Phase 3-8, `internal/cli`)
 
@@ -80,12 +87,13 @@ gitd mirror list
 
 | Verb | Role |
 |------|------|
-| `serve` | The gateway ForceCommand **and** the daemon. With `SSH_CONNECTION` set it runs the sshcmd gateway (greeting, `git-upload-pack`/`git-receive-pack`); as the `gitd-serve` unit it runs the actions-channel server (socket `/v1/bundle` + `/v1/deliver` + `/v1/restore`, spool sweep, weekly verify, startup catch-up) and the `:443` mTLS browse server (R10-Q1, R12-Q5). |
+| `serve` | The gateway ForceCommand **and** the daemon. With `SSH_CONNECTION` set it runs the sshcmd gateway (greeting, `git-upload-pack`/`git-receive-pack`); as the `gitd-serve` unit it runs the actions-channel server (socket `/v1/bundle` + `/v1/deliver` + `/v1/restore` + `/v1/delete`, spool sweep, weekly verify, startup catch-up) and the `:443` mTLS browse server (R10-Q1, R12-Q5). |
 | `notify` | Post-receive hook: writes one spool event per ref line (R11-Q1), submits the bundle upload to serve over the socket, and runs sync-mode deliveries. |
 | `pre-receive` | Pre-receive hook: strict stdin parse, statfs disk headroom, fail-closed policy engine (R9-Q7, R7-Q4, R5-Q1). |
 | `spool` | `list` / `replay <id>` / `purge` of the webhook spool; `replay` routes over the serve socket. Bare `gitd spool` prints this subcommand reference (usage, exit 2); `gitd spool help` prints it and exits 0. |
 | `ddns` | Refresh the Namecheap dynamic DNS record (6h timer; reads `ddns.password_file`, root). |
 | `mirror` | `list [<repo>]` / `delete <repo>` / `restore <repo>` — `list` with no `<repo>` enumerates every mirrored repo (one NDJSON object per repo, R13-Q6); `restore` is serve-orchestrated + agent-executed (serve stages the job over the socket, the `gitd-restore` agent writes `/srv/git/<repo>.git` as git). |
+| `repo` | `list` / `delete --yes <repo>` / `help` — `list` enumerates the live bare repos under `/srv/git` read-only (one name per line, constants only, no config needed); `delete` removes `/srv/git/<repo>.git` ONLY (serve-orchestrated + agent-executed: serve stages the delete job over the socket, the `gitd-restore` agent performs the `/srv/git` removal as git), S3 bundle mirrors retained (restorable via `gitd mirror restore <repo>`), gated by the mandatory `--yes`; bare `gitd repo` prints the reference (usage, exit 2), `gitd repo help` prints it and exits 0. |
 | `mirror-agent` | Background daemon role (runs in the `gitd-restore` container, not an admin op): scan-then-watches `/var/spool/gitd/restore` and performs git-context restores as the `git` user. |
 | `version` | Print the link-time version string. |
 
@@ -144,7 +152,7 @@ shell; anything timed/systemd/host-OS → SSM.** Concretely:
 |------|-------|
 | Reply to a dead-lettered webhook | SSH → `gitd spool replay <id>` |
 | Repo restore from S3 | SSH → `gitd mirror restore <repo>` (serve socket + gitd-restore agent; requires both running) |
-| Delete a repo | SSM → `rm -rf /srv/git/<repo>.git`, then SSH → `gitd mirror delete <repo>` |
+| Delete a repo | SSH → `gitd repo delete --yes <repo>` (live repo only; keeps S3 bundles), then optionally SSH → `gitd mirror delete <repo>` (S3 bundles) to fully remove |
 | Inspect push/delivery audit logs | SSM → `journalctl -u gitd-serve` |
 | Inspect restore audit logs | SSM → `journalctl -u gitd-serve` (staging) + `-u gitd-restore` (restore) |
 | Restart a container unit after a crash | SSM → `systemctl restart gitd-sshd` |

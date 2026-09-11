@@ -15,11 +15,15 @@ internal). Module path `github.com/ChronicCmposer/gitd`, Go 1.26.x, Bazel
 |---------|------|------|
 | `:22` SSH gateway | custom static **OpenSSH** with **hybrid-PQC kex** (`mlkem768x25519`/`sntrup761x25519`), SSH-CA mutual auth, GitHub-style greeting, push-to-create | SSH host + user certs (local CA) |
 | S3 mirror | every push bundles `--all` → versioned `s3://git.cmposer.cc/repos/<repo>/<ts>.bundle`; weekly verify; restore via `gitd mirror restore <repo>` | instance role |
-| `:443` browse | mTLS read-only UI (server/client/none render toggle, security headers, empty-repo pages) | client cert from the TLS CA |
+| `:443` browse | mTLS read-only UI (server/client/none render toggle, security headers, empty-repo pages, version footer) | client cert from the TLS CA |
 | webhooks | compiled-in Go plugins (`http`, `logger`) + durable JSON spool, HMAC-SHA256, dead-letter + replay | plugin `type:` + HMAC secret |
 
+Every browse page carries a global footer —
+`gitd — personal git server · mTLS browse · vX.Y.Z` — where the version is
+the link-time-stamped release tag (`v0.0.0-devel` in dev builds).
+
 The admin path is split (R2-Q16): **SSH lands in the container shell** for
-data-plane ops (`gitd spool`/`mirror`, repo management); **SSM Session Manager**
+data-plane ops (`gitd spool`/`mirror`/`repo`, repo management); **SSM Session Manager**
 (`ssm:StartSession`-only IAM) is the host plane (containerd, dnf, systemctl,
 journalctl). See [admin-split](docs/admin-split.md).
 
@@ -37,8 +41,8 @@ journalctl). See [admin-split](docs/admin-split.md).
   memory, `--rootfs-ro`.
 - **gitd-serve** owns a strimserver-style actions channel (buffered chan +
   single worker) and an HTTP-over-unix-socket control plane (`/v1/bundle`,
-  `/v1/deliver`); hook shims exec `gitd notify`/`gitd pre-receive`, which submit
-  uploads/deliveries into that channel.
+  `/v1/deliver`, `/v1/restore`, `/v1/delete`); hook shims exec `gitd
+  notify`/`gitd pre-receive`, which submit uploads/deliveries into that channel.
 - Certs/CA live **client-side only** (`~/.ssh/gitd-ca/`, gitignored); SSM
   `/gitd/*` carries the issued material to the host (upload-certs.sh), with
   per-handshake reads for zero-downtime TLS rotation and passwordless renewal.
@@ -53,7 +57,7 @@ strictly worse). See the [quantum threat model](docs/quantum-threat-model.md).
 ```
 cmd/gitd/                entry point (dispatch in internal/cli)
 internal/
-  cli/                   gitd subcommand dispatch: serve, notify, pre-receive, spool, ddns, mirror, version
+  cli/                   gitd subcommand dispatch: serve, notify, pre-receive, spool, ddns, mirror, repo, version
   sshcmd/                SSH_ORIGINAL_COMMAND tokenizer + git gateway + greeting
   config/                strict YAML (gitd.yaml, webhooks.yaml), SIGHUP reload
   event/ spool/          webhook event envelope + durable JSON spool (fsync, retries, dead-letter)
@@ -171,6 +175,8 @@ go run ./cmd/gitd spool help                           # print the spool subcomm
 go run ./cmd/gitd mirror list <repo>                   # list S3 bundles
 go run ./cmd/gitd mirror delete <repo>                 # delete a repo's bundles
 go run ./cmd/gitd mirror restore <repo>           # restore from the latest bundle into /srv/git/<repo>.git (serve socket)
+go run ./cmd/gitd repo list                       # list live bare repos under /srv/git (read-only)
+go run ./cmd/gitd repo delete --yes <repo>        # remove /srv/git/<repo>.git only via serve socket + gitd-restore agent (keeps S3 bundles)
 go run ./cmd/gitd ddns --config ...                    # Namecheap dynamic DNS refresh
 ```
 

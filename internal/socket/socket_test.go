@@ -196,6 +196,50 @@ func TestClientRestoreServeDownFailsFast(t *testing.T) {
 	}
 }
 
+func TestClientDeleteRepo(t *testing.T) {
+	var got DeleteRequest
+	path, stop := serveFake(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/delete" {
+			http.Error(w, "wrong endpoint", http.StatusBadRequest)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer stop()
+
+	c := NewClient(path, 60*time.Second)
+	if err := c.DeleteRepo(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	if got.Repo != "r" {
+		t.Errorf("DeleteRepo sent %+v", got)
+	}
+}
+
+func TestClientDeleteRepoFailureIsError(t *testing.T) {
+	path, stop := serveFake(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "storage down", http.StatusInternalServerError)
+	}))
+	defer stop()
+
+	c := NewClient(path, 60*time.Second)
+	if err := c.DeleteRepo(context.Background(), "r"); err == nil {
+		t.Error("DeleteRepo on 500 = nil error, want error")
+	}
+}
+
+func TestClientDeleteRepoServeDownFailsFast(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.sock")
+	c := NewClient(path, 2*time.Second)
+	if err := c.DeleteRepo(context.Background(), "r"); err == nil {
+		t.Error("DeleteRepo with no socket = nil error, want error (serve down)")
+	}
+}
+
 func TestTrim(t *testing.T) {
 	if got := trim("x"); got != "x" {
 		t.Errorf("trim(short) = %q", got)

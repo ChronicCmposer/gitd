@@ -1,14 +1,16 @@
 /* git.cmposer.cc browse UI — Gruvbox original dark theme (frontend-philosophy:
  * committed color, monospace identity, atmospheric depth, controlled density).
- * Palette: bg0 #282828, bg1 #3c3836, fg #ebdbb2, red #fb4934, green #b8bb26,
+ * Palette: bg0 #000000, bg1 #3c3836, fg #ebdbb2, red #fb4934, green #b8bb26,
  * yellow #fabd2f, blue #83a598, purple #d3869b, aqua #8ec07c, orange #fe8019.
- * App canvas: --bg-app #000000 (pure-black page background; the Gruvbox
- * surfaces below stay on bg0 so the theme is preserved).
+ * Pure-black surfaces: --bg0 is #000000 (panels, tabs.active, code frames)
+ * while --bg1 #3c3836 stays the elevated tone (hover, active, inputs, table
+ * headers) so affordances remain visible. The app canvas --bg-app is also
+ * #000000 with the two radial depth washes.
  */
 :root {
-  --bg-app: #000000; /* pure-black app canvas; Gruvbox surfaces stay on --bg0 */
-  --bg0: #282828;
-  --bg1: #3c3836;
+  --bg-app: #000000; /* pure-black app canvas */
+  --bg0: #000000;    /* primary surfaces: panels, tabs.active, code frames */
+  --bg1: #3c3836;    /* elevated tone: hover, active, inputs, table headers */
   --bg2: #504945;
   --bg3: #665c54;
   --fg0: #fbf1c7;
@@ -260,6 +262,17 @@ a:hover { color: var(--aqua); text-decoration: underline; }
   overflow-x: auto;
 }
 .blob-hl pre { margin: 0; padding: 0.9rem; white-space: pre; }
+
+/* Black code-token containers: the vendored chroma gruvbox.css and
+ * highlight.js gruvbox-dark.css paint .chroma/.hljs/.bg #282828 (generated
+ * themes — not edited by hand). The app surfaces are pure black (--bg0), so
+ * these containers are overridden here to match. style.css loads AFTER the
+ * vendored themes, so equal-specificity rules win on order; the element
+ * prefixes (pre.chroma / pre.hljs) additionally beat the vendored bare-class
+ * rules by specificity, keeping the override robust to any future reorder. */
+pre.chroma, pre.hljs, .chroma, .hljs, .bg {
+  background-color: #000000;
+}
 
 /* Line-number gutter: highlight.go uses Chroma's inline .ln spans (not the
  * .lnt table layout) so the single <pre class="chroma"> fits the .blob-hl

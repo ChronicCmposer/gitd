@@ -10,6 +10,7 @@ go_library(
         "mirror_agent.go",
         "notify.go",
         "pre_receive.go",
+        "repo.go",
         "serve.go",
         "spool.go",
         "version.go",

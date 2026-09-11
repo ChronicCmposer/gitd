@@ -1,33 +1,41 @@
-// The git-context restore agent.
+// The git-context restore/delete agent.
 //
 // gitd-serve can no longer write /srv/git itself: its container mounts
 // /srv/git rbind:ro and lacks CAP_CHOWN. Restores therefore move to a
 // dedicated gitd-restore container that mounts /srv/git rbind:rw and runs as
 // the git user (uid 1001) with no elevated caps. This file implements the
-// gitd mirror-agent daemon that performs those restores, plus the mirror
-// methods the agent and serve share.
+// gitd mirror-agent daemon that performs those restores (and, since the same
+// container is the only thing allowed to write /srv/git, repo deletes too),
+// plus the mirror methods the agent and serve share.
 //
 // The handoff is a job spool under /var/spool/gitd/restore/:
 //
-//   - gitd-serve downloads the latest S3 bundle, verifies it, stages it as
-//     <id>.bundle, and writes the JSON job <id>.request =
-//     {"repo":"<name>","bundle":"<id>.bundle"} (the bundle before the
-//     request, so a request event implies its bundle is complete).
+//   - gitd-serve writes the JSON job <id>.request. For a restore it first
+//     downloads the latest S3 bundle, verifies it, and stages it as
+//     <id>.bundle, then writes {"repo":"<name>","bundle":"<id>.bundle"} (the
+//     bundle before the request, so a request event implies its bundle is
+//     complete). For a delete it writes {"type":"delete","repo":"<name>"} —
+//     no bundle, nothing to download or verify.
 //   - The agent scan-then-watches the spool with fsnotify (observer pattern,
 //     no polling): on startup it processes every leftover <id>.request
 //     (crash recovery), then reacts to new request files immediately.
-//   - Each job re-validates the repo name, re-verifies the staged bundle
-//     itself (defense in depth — never trust serve's prior verify), writes
-//     the restored repo into /srv/git/<repo>.git ONLY via mirror.Restore
-//     (the dest is derived from the validated repo name, so an arbitrary
-//     destination is impossible by construction), and writes the outcome to
+//   - Each restore job re-validates the repo name, re-verifies the staged
+//     bundle itself (defense in depth — never trust serve's prior verify),
+//     writes the restored repo into /srv/git/<repo>.git ONLY via
+//     mirror.Restore (the dest is derived from the validated repo name, so an
+//     arbitrary destination is impossible by construction), and writes the
+//     outcome to <id>.result. Each delete job re-validates the repo name,
+//     resolves the target under reposRoot (symlink-escape guard), confirms it
+//     is a bare repo, removes ONLY /srv/git/<repo>.git (S3 bundle mirrors are
+//     never touched, so the repo stays restorable), and writes the outcome to
 //     <id>.result.
 //
 // Stale-job ownership (who removes what):
 //
 //   - The agent CONSUMES its inputs: it removes <id>.request and <id>.bundle
 //     before writing <id>.result, so a restart never re-triggers a processed
-//     job and a crash between the two leaves nothing to re-run.
+//     job and a crash between the two leaves nothing to re-run. Delete jobs
+//     have no bundle; the removal tolerates the missing file.
 //   - Serve owns the final cleanup: after reading <id>.result it removes the
 //     three files (idempotent).
 //   - On serve startup, serve sweeps leftover restore/ files — jobs it was
@@ -37,10 +45,11 @@
 //     files: those may be legitimate crash leftovers (a job serve handed off
 //     but never saw finish), and re-running one is safe because the repo
 //     name is re-validated, the staged bundle is re-verified, and
-//     mirror.Restore fails fast on an already-existing dest.
+//     mirror.Restore fails fast on an already-existing dest (a re-run delete
+//     simply fails with "not found" — the repo is already gone).
 //   - The race between serve's startup sweep and the agent's startup scan is
 //     benign in both orders: if serve sweeps first the agent finds nothing;
-//     if the agent scans first the restore completes and serve's sweep then
+//     if the agent scans first the job completes and serve's sweep then
 //     removes whatever remains.
 package mirror
 
@@ -69,22 +78,27 @@ const (
 	JobResultExt  = ".result"
 )
 
-// JobRequest is the restore job envelope gitd-serve writes to <id>.request:
-// the repo to restore and the staged bundle file the agent must re-verify.
+// JobRequest is the job envelope gitd-serve writes to <id>.request: the job
+// type ("" or "restore" = restore from the staged bundle; "delete" = remove
+// the live repo), the repo to act on, and — for restores — the staged bundle
+// file the agent must re-verify.
 type JobRequest struct {
+	Type   string `json:"type"` // "" = restore (legacy protocol), "delete"
 	Repo   string `json:"repo"`
 	Bundle string `json:"bundle"` // "<id>.bundle" — must match the job id
 }
 
 // JobResult is the mirror-agent's outcome written to <id>.result: ok=true on
-// a completed restore, otherwise an error message for serve to surface.
+// a completed job, otherwise an error message for serve to surface.
 type JobResult struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message"`
 }
 
-// DecodeJobRequest parses a restore job request strictly (unknown fields
-// fail loudly, matching the config/event decode discipline).
+// DecodeJobRequest parses a job request strictly (unknown fields fail loudly,
+// matching the config/event decode discipline). A missing type decodes as ""
+// and dispatches to the restore path (legacy restore jobs predate the type
+// field, so an absent type must still be accepted).
 func DecodeJobRequest(data []byte) (*JobRequest, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -232,7 +246,7 @@ func (a *Agent) processExistingJobs(ctx context.Context) error {
 			continue
 		}
 		id := strings.TrimSuffix(e.Name(), JobRequestExt)
-		a.log.Info("mirror-agent: startup restore job", "id", id)
+		a.log.Info("mirror-agent: startup job", "id", id)
 		a.processJob(ctx, id)
 	}
 	return nil
@@ -250,7 +264,7 @@ func (a *Agent) onEvent(ctx context.Context, ev fsnotify.Event) {
 	if !ok {
 		return
 	}
-	a.log.Info("mirror-agent: restore job event", "id", id, "op", ev.Op.String())
+	a.log.Info("mirror-agent: job event", "id", id, "op", ev.Op.String())
 	a.processJob(ctx, id)
 }
 
@@ -262,10 +276,10 @@ func requestJobID(path string) (string, bool) {
 	return strings.CutSuffix(filepath.Base(path), JobRequestExt)
 }
 
-// processJob runs one restore job: read the request, validate everything at
-// the boundary, re-verify the staged bundle, restore via the mirror, and
-// record the outcome. A request that is already gone (a queued event for a
-// job the startup scan or a previous event consumed) is a no-op.
+// processJob runs one job: read the request, validate everything at the
+// boundary, dispatch on the job type, and record the outcome. A request that
+// is already gone (a queued event for a job the startup scan or a previous
+// event consumed) is a no-op.
 func (a *Agent) processJob(ctx context.Context, id string) {
 	reqPath := filepath.Join(a.workdir, id+JobRequestExt)
 	data, err := os.ReadFile(reqPath)
@@ -281,7 +295,52 @@ func (a *Agent) processJob(ctx context.Context, id string) {
 		a.finish(id, "", false, err.Error())
 		return
 	}
-	a.restore(ctx, id, req)
+	// Dispatch on the job type. The empty type is the legacy restore protocol
+	// (restore jobs predate the type field), so anything that is not an
+	// explicit "delete" runs the restore path.
+	switch req.Type {
+	case "delete":
+		a.deleteRepo(id, req)
+	default:
+		a.restore(ctx, id, req)
+	}
+}
+
+// deleteRepo executes one validated delete job: remove reposRoot/<repo>.git
+// ONLY. Every trust decision is a guard clause at the top (early exit);
+// anything untrusted fails the job without touching the repo store. S3
+// bundle mirrors are never touched, so the repo stays restorable via
+// gitd mirror restore.
+func (a *Agent) deleteRepo(id string, req *JobRequest) {
+	// Only a validated repo name may reach the remove path.
+	if !repo.ValidName(req.Repo) {
+		a.finish(id, req.Repo, false, fmt.Sprintf("invalid repo name %q", req.Repo))
+		return
+	}
+	target := filepath.Join(a.reposRoot, req.Repo+".git")
+	// Resolve the target and verify it stays under reposRoot (symlink-escape
+	// and path-traversal guard; RealpathUnder fails loudly on an escape or a
+	// missing target, so a nonexistent repo is a job failure, never a no-op).
+	resolved, err := repo.RealpathUnder(a.reposRoot, target)
+	if err != nil {
+		a.finish(id, req.Repo, false, fmt.Sprintf("resolve %s: %v", target, err))
+		return
+	}
+	// Only a real bare repo may be removed — never a non-bare path.
+	ok, err := repo.IsBareRepo(resolved)
+	if err != nil {
+		a.finish(id, req.Repo, false, fmt.Sprintf("inspect %s: %v", req.Repo, err))
+		return
+	}
+	if !ok {
+		a.finish(id, req.Repo, false, fmt.Sprintf("%s is not a bare git repository", req.Repo))
+		return
+	}
+	if err := os.RemoveAll(resolved); err != nil {
+		a.finish(id, req.Repo, false, fmt.Sprintf("remove %s: %v", req.Repo, err))
+		return
+	}
+	a.finish(id, req.Repo, true, "repo deleted")
 }
 
 // restore executes one validated job. Every trust decision is a guard clause
@@ -323,11 +382,13 @@ func (a *Agent) restore(ctx context.Context, id string, req *JobRequest) {
 
 // finish records the job outcome in <id>.result (slog-audited with repo,
 // bundle, ok/error) and consumes the job inputs. The inputs (<id>.request +
-// <id>.bundle) are removed BEFORE the result is written: once <id>.result
-// exists, serve owns the final cleanup, and a crash between the removal and
-// the result write must not leave a request that a restart would re-run
+// <id>.bundle — delete jobs have no bundle; the removal tolerates the missing
+// file) are removed BEFORE the result is written: once <id>.result exists,
+// serve owns the final cleanup, and a crash between the removal and the
+// result write must not leave a request that a restart would re-run
 // (re-running a completed restore would fail with "already exists" and
-// overwrite the good result). The <id>.result is left for serve.
+// overwrite the good result; a re-run delete fails with "not found"). The
+// <id>.result is left for serve.
 func (a *Agent) finish(id, repo string, ok bool, message string) {
 	for _, name := range []string{id + JobRequestExt, id + JobBundleExt} {
 		if err := os.Remove(filepath.Join(a.workdir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -343,7 +404,7 @@ func (a *Agent) finish(id, repo string, ok bool, message string) {
 		a.log.Error("mirror-agent: write result", "id", id, "error", err)
 		return
 	}
-	a.log.Info("restore job finished", "id", id, "repo", repo, "bundle", id+JobBundleExt, "ok", ok, "message", message)
+	a.log.Info("job finished", "id", id, "repo", repo, "bundle", id+JobBundleExt, "ok", ok, "message", message)
 }
 
 // LatestBundle downloads the latest bundle for repo and returns its bytes.
