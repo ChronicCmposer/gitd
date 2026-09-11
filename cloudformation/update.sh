@@ -2,19 +2,28 @@
 # cloudformation/update.sh — in-place update of a live gitd server (R3-Q10, R6-Q3).
 #
 # This is NOT deploy.sh. CloudFormation stays for initial infra + emergency
-# rebuild only; routine upgrades ship a new image in place: build (or reuse) the
-# OCI tarball, publish it to the artifact channel, then over SSM have the host
-# fetch it, verify the pinned sha256, ctr-images import it, and restart the
-# three container units. EBS (/srv/git) + spool (/var/spool/gitd) are preserved
-# untouched — an update never does a bundle restore (mirrors are a backup, not a
-# deploy input).
+# rebuild only; routine upgrades ship a new image in place. The image is assumed
+# to ALREADY be built + GPG-signed + published by `make release` (release.sh):
+# update.sh does NOT build and does NOT sign. It VERIFIES the pre-signed image
+# against the pinned public key (verify_artifact) and the operator's out-of-band
+# sha256 pin (verify_sha256), mirrors it onto the artifact channel if needed,
+# then over SSM has the host fetch it, re-verify the GPG signature and the pinned
+# sha256, ctr-images import it, and restart the three container units. EBS
+# (/srv/git) + spool (/var/spool/gitd) are preserved untouched — an update never
+# does a bundle restore (mirrors are a backup, not a deploy input).
 #
 # The critical security property (R6-Q3): the sha256 pin is provided OUT OF BAND
 # by the operator, as an argument or the GITD_IMAGE_SHA256 env var — the value
-# printed by `make image-container` / the release notes. It is NEVER fetched from
-# the artifact channel. The script verifies the local tarball against that pin
-# before publishing, and the host re-verifies its download against the SAME pin
-# before importing. Any mismatch aborts.
+# printed by `make release` / the release notes. It is NEVER fetched from the
+# artifact channel. The script verifies the local tarball against that pin before
+# publishing, and the host re-verifies its download against the SAME pin before
+# importing. Any mismatch aborts.
+#
+# Provenance (GPG): the image is signed by `make release` (release.sh →
+# sign_artifact), which produces gitd-container.tar.asc. update.sh requires that
+# .asc to exist and calls verify_artifact to confirm the signature is good
+# against the pinned public key — it does NOT re-sign. The published .asc is the
+# existing "${IMAGE_TAR}.asc" carried through from `make release`.
 #
 # Transport: host-plane ops (ctr import, systemctl) go over SSM Session Manager
 # (AWS-StartNonInteractiveCommand), which is the only elevation the admin split
@@ -28,8 +37,9 @@
 # Options:
 #   --sha256 <hex>          pinned sha256 of the NEW gitd-container.tar (R6-Q3;
 #                           required, or GITD_IMAGE_SHA256)
-#   --image-tar <path>      prebuilt gitd-container.tar (default: build via
-#                           `make image-container`)
+#   --image-tar <path>      prebuilt, signed gitd-container.tar (default:
+#                           ${REPO_ROOT}/tools/dist/out/gitd-container.tar, as
+#                           produced by `make release`; must exist — no build)
 #   --bucket <bucket>       default git.cmposer.cc
 #   --region <region>       default us-east-2
 #   --stack-name <name>     default gitd (used to resolve the instance)
@@ -58,7 +68,7 @@ SIGNING_KEY="${REPO_ROOT}/tools/release/gitd-signing-key.asc"
 
 # --- defaults ------------------------------------------------------------------
 SHA256=""
-IMAGE_TAR=""
+IMAGE_TAR="${REPO_ROOT}/tools/dist/out/gitd-container.tar"
 BUCKET="git.cmposer.cc"
 REGION="us-east-2"
 STACK_NAME="gitd"
@@ -109,13 +119,19 @@ Usage:
   cloudformation/update.sh --sha256 <hex> [opts]
   GITD_IMAGE_SHA256=<hex> cloudformation/update.sh [opts]
 
+The image must already be built + GPG-signed + published by `make release`
+(release.sh signs it -> gitd-container.tar.asc). update.sh VERIFIES that signed
+image (verify_artifact against the pinned public key + the operator's pinned
+sha256), mirrors it onto the artifact channel if needed, then updates the live
+host over SSM: fetch -> verify GPG + pinned sha256 -> ctr images import ->
+restart gitd units. It does NOT build or sign.
+
 The sha256 pin must be supplied out-of-band (never fetched from the artifact
-channel). Build (or --image-tar), publish, then update the live host over SSM:
-fetch -> verify pinned sha256 -> ctr images import -> restart gitd units.
+channel). If gitd-container.tar(.asc) is absent, run `make release` first.
 
 Options:
   --sha256 <hex>          pinned sha256 of the new gitd-container.tar
-  --image-tar <path>      prebuilt gitd-container.tar (default: make image-container)
+  --image-tar <path>      prebuilt, signed gitd-container.tar (default: tools/dist/out/gitd-container.tar)
   --bucket <bucket>       default git.cmposer.cc
   --region <region>       default us-east-2
   --stack-name <name>     default gitd
@@ -144,27 +160,24 @@ require_cmd base64
 # silently skip a publish (code-philosophy).
 require_gh_auth
 
-# --- obtain the image tarball: prebuilt, or build it (R3-Q10) ---------------------
-if [[ -n "${IMAGE_TAR}" ]]; then
-    [[ -f "${IMAGE_TAR}" ]] || die "--image-tar not found: ${IMAGE_TAR}"
-else
-    echo "gitd: update: building the OCI image (make image-container)"
-    ( cd "${REPO_ROOT}" && make image-container )
-    IMAGE_TAR="${REPO_ROOT}/tools/dist/out/gitd-container.tar"
-    [[ -f "${IMAGE_TAR}" ]] || die "build did not produce ${IMAGE_TAR}"
-fi
+# --- the image tarball must already exist, pre-signed (R3-Q10) ---------------------
+# update.sh does NOT build: the image is built + GPG-signed + published by
+# `make release` (release.sh). Default is the release output path; a custom
+# prebuilt path may be supplied via --image-tar. Fail fast if it is absent.
+[[ -f "${IMAGE_TAR}" ]] || die "image tarball not found: ${IMAGE_TAR} (run 'make release' first — it builds and signs the image)"
 
 # R6-Q3: the operator-supplied pin must match the artifact we are about to ship.
-# If a rebuild produced a different hash, the operator gave us the wrong pin —
-# abort rather than publish something that won't verify on the host.
+# Abort rather than publish something that won't verify on the host.
 echo "gitd: update: verifying local tarball ${IMAGE_TAR} against pinned sha256"
 verify_sha256 "${SHA256}" "${IMAGE_TAR}"
 echo "gitd: update: local sha256 OK: ${SHA256}"
 
-# GPG-sign the image before publishing: the host refuses any image whose .asc
-# it cannot verify against the pinned public key. sign_artifact fails loudly.
+# Provenance: the image was GPG-signed by `make release`; update.sh VERIFIES it,
+# it does NOT re-sign. Require the .asc to exist, then confirm the signature is
+# good against the pinned public key. verify_artifact fails loudly.
 [[ -f "${SIGNING_KEY}" ]] || die "pinned GPG signing key not found: ${SIGNING_KEY}"
-sign_artifact "${IMAGE_TAR}"
+[[ -f "${IMAGE_TAR}.asc" ]] || die "signed image .asc missing: ${IMAGE_TAR}.asc (run 'make release' first — it signs and publishes the image)"
+verify_artifact "${IMAGE_TAR}" "${SIGNING_KEY}"
 
 # --- publish to the artifact channel, idempotently (R3-Q2) -------------------------
 # GitHub Releases primary + S3 fallback; upload tar + .asc together. Skip

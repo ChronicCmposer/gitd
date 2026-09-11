@@ -144,7 +144,7 @@ image-container: ## Produce gitd-container.tar for `ctr images import` (R3-Q2).
 deploy: ## Deploy the stack via CloudFormation (Phase 7). Usage: make deploy ARGS="--key-name KP"
 	./cloudformation/deploy.sh $(ARGS)
 
-update: ## In-place update of a live server (Phase 8.1, R3-Q10/R6-Q3). Usage: make update ARGS="--sha256 <hex>"
+update: ## In-place update of a live server (Phase 8.1, R3-Q10/R6-Q3). Image must be prebuilt + signed by `make release`; update VERIFIES the signature + pinned sha256 (it does not sign). Usage: make update ARGS="--sha256 <hex>"
 	./cloudformation/update.sh $(ARGS)
 
 create-bucket: ## Provision the git.cmposer.cc S3 bucket before the first deploy (deploy-before-stack ordering).
