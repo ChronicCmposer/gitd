@@ -27,13 +27,24 @@ const binaryScanBytes = 8000
 // build one enormous token span, so the blob is left unhighlighted (Q11).
 const maxPathologicalLine = 10000
 
-// blobFormatter renders whole-file blobs: inline token styles (no CSS classes,
-// so no stylesheet dependency server-side), Gruvbox colors, and a line-number
+// blobFormatter renders whole-file blobs: token CSS classes (html.WithClasses
+// true — the app's CSP is style-src 'self' with no unsafe-inline, so inline
+// style attributes would be blocked; the matching same-origin stylesheet is
+// /static/vendor/chroma/gruvbox.css), Gruvbox colors, and a line-number
 // gutter. It is deliberately separate from the markdown formatter in
 // markdown.go, which must stay line-number-free.
+//
+// Line numbers use Chroma's inline .ln spans (html.LineNumbersInTable(false),
+// the default in this version) rather than the .lnt table layout: the inline
+// form emits a single <pre class="chroma"> that slots straight into the
+// .blob-hl frame, whose .blob-hl pre rule already supplies the padding and
+// white-space: pre. A table would nest extra <pre> cells and need its own
+// frame resets. The gutter is right-aligned in style.css via
+// .blob-hl .chroma .ln.
 var blobFormatter = html.New(
-	html.WithClasses(false),
+	html.WithClasses(true),
 	html.WithLineNumbers(true),
+	html.LineNumbersInTable(false),
 )
 
 // resolveBlobLexer decides whether a non-markdown blob deserves syntax
@@ -71,9 +82,10 @@ func hasPathologicalLine(data []byte) bool {
 	return false
 }
 
-// highlightBlobServer renders a lexed blob as Chroma HTML: a
-// <pre style=...><code> block with a line-number gutter, safe to inject
-// directly into the page. Callers pass a non-nil lexer only.
+// highlightBlobServer renders a lexed blob as Chroma HTML: a class-based
+// <pre class="chroma"><code> block with an inline .ln line-number gutter,
+// safe to inject directly into the page. The caller wraps it in the
+// .blob-hl frame. Callers pass a non-nil lexer only.
 func highlightBlobServer(lexer chroma.Lexer, data []byte) (template.HTML, error) {
 	it, err := lexer.Tokenise(nil, string(data))
 	if err != nil {

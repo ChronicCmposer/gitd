@@ -198,7 +198,7 @@ var fragTmpl = template.Must(template.New("fragments").Funcs(template.FuncMap{
     <div class="markdown">{{.Body}}</div>
     {{end}}
   {{else if .Highlighted}}
-    {{.Body}}
+    <div class="blob-hl">{{.Body}}</div>
   {{else if .Lang}}
     <pre class="blob hljs" data-lang="{{.Lang}}">{{.Body}}</pre>
   {{else}}

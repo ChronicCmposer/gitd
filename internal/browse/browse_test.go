@@ -333,6 +333,7 @@ func TestClientRenderModeServesAssets(t *testing.T) {
 		"/static/vendor/marked/12.0.2/marked.min.js",
 		"/static/vendor/highlight.js/11.10.0/highlight.min.js",
 		"/static/render-client.js",
+		"/static/vendor/chroma/gruvbox.css",
 	} {
 		if !strings.Contains(body, asset) {
 			t.Errorf("client home page missing %s (R10-Q8)", asset)
@@ -343,6 +344,7 @@ func TestClientRenderModeServesAssets(t *testing.T) {
 		"/static/vendor/marked/12.0.2/marked.min.js",
 		"/static/vendor/highlight.js/11.10.0/highlight.min.js",
 		"/static/vendor/highlight.js/gruvbox/gruvbox-dark.css",
+		"/static/vendor/chroma/gruvbox.css",
 		"/static/style.css",
 	} {
 		r := get(t, h, asset)
@@ -646,19 +648,33 @@ func TestBlobServerModeHighlighting(t *testing.T) {
 	h := testHandler(t, "server", nil)
 	makeRepo(t, h.reposRoot, "repo1")
 
-	// main.go resolves a Go lexer: Chroma renders its own inline-styled
-	// <pre> (WithClasses(false)) with a line-number gutter, and the template
-	// must NOT wrap it in <pre class="blob">.
+	// main.go resolves a Go lexer: Chroma renders a class-based
+	// <pre class="chroma"> (WithClasses(true) — the CSP style-src 'self'
+	// blocks inline styles) with an inline .ln line-number gutter, wrapped
+	// in the .blob-hl frame.
 	rec := get(t, h, "/repo1/blob?ref=main&path=main.go")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("highlighted blob = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `<pre style="color:#ebdbb2;background-color:#282828`) {
-		t.Errorf("highlighted blob missing Chroma Gruvbox <pre>")
+	if !strings.Contains(body, `<pre class="chroma">`) {
+		t.Errorf("highlighted blob missing Chroma class-based <pre>")
 	}
-	if !strings.Contains(body, "user-select:none") {
-		t.Errorf("highlighted blob missing line-number gutter")
+	// Go lexer token classes: "package" -> .kn, "func" -> .kd, string -> .s.
+	if !strings.Contains(body, `class="kn"`) {
+		t.Errorf("highlighted blob missing token CSS classes")
+	}
+	if !strings.Contains(body, `class="ln"`) {
+		t.Errorf("highlighted blob missing class-based line-number gutter")
+	}
+	if strings.Contains(body, "style=") {
+		t.Errorf("highlighted blob must not emit inline styles (CSP style-src 'self')")
+	}
+	if !strings.Contains(body, `<div class="blob-hl">`) {
+		t.Errorf("highlighted blob missing .blob-hl frame")
+	}
+	if !strings.Contains(body, `<link rel="stylesheet" href="/static/vendor/chroma/gruvbox.css">`) {
+		t.Errorf("highlighted blob page missing gruvbox.css stylesheet link")
 	}
 	if strings.Contains(body, `<pre class="blob"`) {
 		t.Errorf("highlighted blob must skip the .blob wrapper")

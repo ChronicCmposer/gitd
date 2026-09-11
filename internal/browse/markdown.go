@@ -15,11 +15,16 @@ import (
 // rendered inline: goldmark runs with unsafe=false (R2-Q6), so any embedded
 // HTML is escaped rather than emitted as markup. The chroma formatter uses
 // the Gruvbox dark style for code blocks, matching the browse theme.
+//
+// The formatter emits CSS classes (html.WithClasses(true)) instead of inline
+// style attributes: the app's CSP is style-src 'self' (no unsafe-inline), so
+// inline styles would be blocked. The matching same-origin stylesheet is
+// /static/vendor/chroma/gruvbox.css, linked in the page shell.
 var mdParser = goldmark.New(
 	goldmark.WithExtensions(extension.GFM, highlighting.NewHighlighting(
 		highlighting.WithStyle("gruvbox"),
 		highlighting.WithFormatOptions(
-			html.WithClasses(false),
+			html.WithClasses(true),
 			html.WithLineNumbers(false),
 		),
 	)),

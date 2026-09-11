@@ -244,9 +244,11 @@ a:hover { color: var(--aqua); text-decoration: underline; }
  * pre-wrap keeps long lines soft-wrapped since there is no gutter to align. */
 .blob { white-space: pre-wrap; font-size: 12.5px; padding: 0.9rem; overflow-x: auto; }
 
-/* Server-rendered highlighted blob: Chroma emits its own inline-styled
- * <pre><code> (with a line-number gutter), so we only supply the Gruvbox
- * frame. white-space: pre keeps the gutter aligned with its code column. */
+/* Server-rendered highlighted blob: Chroma emits a class-based
+ * <pre class="chroma"><code> (CSP style-src 'self' forbids inline styles;
+ * gruvbox.css colors the tokens), so this frame only supplies the Gruvbox
+ * background, border, and horizontal scroll. white-space: pre keeps the
+ * inline .ln gutter aligned with its code column. */
 .blob-hl {
   background: var(--bg0);
   border: var(--border);
@@ -255,6 +257,17 @@ a:hover { color: var(--aqua); text-decoration: underline; }
   overflow-x: auto;
 }
 .blob-hl pre { margin: 0; padding: 0.9rem; white-space: pre; }
+
+/* Line-number gutter: highlight.go uses Chroma's inline .ln spans (not the
+ * .lnt table layout) so the single <pre class="chroma"> fits the .blob-hl
+ * frame. Override the generated gruvbox.css gutter: fix the column width and
+ * right-align the number, then push the code column over. */
+.blob-hl .chroma .ln {
+  min-width: 2.4em;
+  text-align: right;
+  margin-right: 0.9em;
+  user-select: none;
+}
 
 /* Client-highlighted blob: language hint stamped server-side, tokens filled
  * in by render-client.js. Same Gruvbox frame as .markdown pre. */

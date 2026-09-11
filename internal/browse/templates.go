@@ -38,6 +38,7 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/vendor/chroma/gruvbox.css">
 {{if eq .RenderMode "client"}}
 <link rel="stylesheet" href="/static/vendor/highlight.js/gruvbox/gruvbox-dark.css">
 {{end}}
