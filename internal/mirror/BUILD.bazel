@@ -2,10 +2,14 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "mirror",
-    srcs = ["mirror.go"],
+    srcs = [
+        "agent.go",
+        "mirror.go",
+    ],
     importpath = "github.com/ChronicCmposer/gitd/internal/mirror",
     visibility = ["//:__subpackages__"],
     deps = [
+        "@com_github_fsnotify_fsnotify//:fsnotify",
         "//internal/gitenv",
         "//internal/objectstore",
         "//internal/repo",
@@ -15,6 +19,7 @@ go_library(
 go_test(
     name = "mirror_test",
     srcs = [
+        "agent_test.go",
         "mirror_extra_test.go",
         "mirror_test.go",
     ],

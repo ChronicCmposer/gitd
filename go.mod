@@ -6,6 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.46.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.3
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.112.0
+	github.com/fsnotify/fsnotify v1.10.1
 	// jonbaldie/go-mutesting/v2 is the Phase 9 mutation-tool pin (R4-Q1).
 	// Consumed by the rules_go-built mutation binary //tools/mutesting
 	// (Bazel-only; no Go source imports it, so `go mod tidy` would drop it —
