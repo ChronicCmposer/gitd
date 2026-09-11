@@ -85,6 +85,62 @@ func TestFetchNoBundlesFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no bundles") {
 		t.Fatalf("Fetch(no bundles) = %v, want no-bundles error", err)
 	}
+	// Fetch created dest (git init) before failing on the missing bundle;
+	// partial-failure cleanup must have removed it (no half-initialized repo).
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Errorf("dest %s still exists after no-bundles failure (stat err = %v)", dest, statErr)
+	}
+}
+
+func TestFetchPartialFailureRemovesCreatedDest(t *testing.T) {
+	// A corrupt bundle makes bundle verify fail AFTER git init created dest;
+	// the partial-failure cleanup must remove dest so a failed restore never
+	// leaves a half-initialized repo behind.
+	store := objectstore.NewMemoryStore()
+	m, _ := testMirror(t, store)
+	bare := makeRepo(t)
+	if err := os.Rename(bare, filepath.Join(m.reposRoot, "r.git")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.CreateBundle(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := m.List(context.Background(), "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(context.Background(), keys[0], []byte("not a bundle")); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "restored.git")
+	err = m.Fetch(context.Background(), "r", dest)
+	if err == nil {
+		t.Fatal("Fetch(corrupt bundle) = nil error, want failure")
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Errorf("dest %s still exists after failed Fetch (stat err = %v)", dest, statErr)
+	}
+}
+
+func TestFetchPreExistingDestUntouched(t *testing.T) {
+	// The already-exists fast-fail path must leave a pre-existing dest alone:
+	// this call never created it, so it must not be removed.
+	m, _ := testMirror(t, objectstore.NewMemoryStore())
+	dest := filepath.Join(t.TempDir(), "existing.git")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(dest, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := m.Fetch(context.Background(), "r", dest)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("Fetch into existing dest = %v, want already-exists error", err)
+	}
+	if _, statErr := os.Stat(sentinel); statErr != nil {
+		t.Errorf("pre-existing dest was touched: sentinel gone (stat err = %v)", statErr)
+	}
 }
 
 func TestRestoreDefaultsToReposRoot(t *testing.T) {

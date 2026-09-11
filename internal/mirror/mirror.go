@@ -165,6 +165,11 @@ func (m *Mirror) Delete(ctx context.Context, repoName string) error {
 // verify, unbundle (refs updated from the unbundle listing), audit-log. No
 // git fsck in v1 — bundle verify is the fsck --full equivalent for the
 // bundle (R11-Q5).
+//
+// Partial-failure cleanup: once this call has created dest (git init
+// succeeded), any later failure removes dest again so a failed restore never
+// leaves a half-initialized repo behind. A pre-existing dest fails fast above
+// and is never touched.
 func (m *Mirror) Fetch(ctx context.Context, repoName, dest string) error {
 	if !repo.ValidName(repoName) {
 		return fmt.Errorf("mirror fetch: invalid repo name %q", repoName)
@@ -179,6 +184,14 @@ func (m *Mirror) Fetch(ctx context.Context, repoName, dest string) error {
 	if _, err := m.git.Run(ctx, "init", "--bare", "--object-format=sha256", dest); err != nil {
 		return fmt.Errorf("mirror fetch %s: init: %w", repoName, err)
 	}
+	// Fetch created dest; any step that fails after init removes it. Success
+	// clears the flag just before returning, keeping the restored repo.
+	removeCreatedDest := true
+	defer func() {
+		if removeCreatedDest {
+			_ = os.RemoveAll(dest)
+		}
+	}()
 
 	keys, err := m.List(ctx, repoName)
 	if err != nil {
@@ -202,6 +215,7 @@ func (m *Mirror) Fetch(ctx context.Context, repoName, dest string) error {
 	if err := m.unbundle(ctx, dest, bundlePath); err != nil {
 		return fmt.Errorf("mirror fetch %s: unbundle %s: %w", repoName, latest, err)
 	}
+	removeCreatedDest = false
 	m.log.Info("repo restored from bundle", "repo", repoName, "key", latest, "dest", dest)
 	return nil
 }
