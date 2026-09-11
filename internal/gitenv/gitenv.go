@@ -1,8 +1,9 @@
 // Package gitenv pins the deterministic environment for every gitd git exec
-// (R9-Q4): LC_ALL=C, TZ=UTC, GIT_CONFIG_GLOBAL=/dev/null (system config only —
-// we control it in the image), GIT_TERMINAL_PROMPT=0, a writable HOME, and
-// PATH from the image. Output parsing never depends on caller locale or stray
-// GIT_* environment variables.
+// (R9-Q4): LC_ALL=C, TZ=UTC, GIT_CONFIG_GLOBAL=/dev/null (user config ignored),
+// GIT_CONFIG_SYSTEM=/etc/gitconfig (image system config pinned and enforced:
+// fsckObjects, hooksPath, safe.directory, init.defaultBranch), GIT_TERMINAL_PROMPT=0,
+// a writable HOME, and PATH from the image. Output parsing never depends on
+// caller locale or stray GIT_* environment variables.
 package gitenv
 
 import (
@@ -16,7 +17,9 @@ import (
 // Runner builds git exec commands with the fixed environment (R9-Q4). gitBin
 // is the configured git binary (config.git_binary); home must be a writable
 // directory (git needs it for caches/credentials even with the global config
-// disabled). path is the image PATH, passed verbatim.
+// disabled). path is the image PATH, passed verbatim. The system gitconfig at
+// /etc/gitconfig is pinned via GIT_CONFIG_SYSTEM and enforced on every exec
+// (fsckObjects, hooksPath, safe.directory, init.defaultBranch).
 type Runner struct {
 	gitBin string
 	home   string
@@ -61,6 +64,7 @@ func (r *Runner) env() []string {
 	return []string{
 		"LC_ALL=C",
 		"TZ=UTC",
+		"GIT_CONFIG_SYSTEM=/etc/gitconfig",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_TERMINAL_PROMPT=0",
 		"HOME=" + r.home,

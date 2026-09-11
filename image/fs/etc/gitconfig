@@ -1,9 +1,9 @@
 # gitd system gitconfig (installed at /etc/gitconfig in the image).
 #
-# Sources: R2-Q2 (sha256 object format), R2-Q1 (receive.fsckObjects), R6-Q2
-# (hooksPath), R7-Q3/R6-Q8 (safe.directory '*' — single-user server; the git
-# process runs as uid 1001 while repos may be owned by the push-to-create
-# path), R8-Q9 (gc tuning for the t4g.micro), R2-Q13 (default branch main).
+# Sources: R2-Q1 (receive.fsckObjects), R6-Q2 (hooksPath), R7-Q3/R6-Q8
+# (safe.directory '*' — single-user server; the git process runs as uid 1001
+# while repos may be owned by the push-to-create path), R8-Q9 (gc tuning for
+# the t4g.micro), R2-Q13 (default branch main).
 #
 # This file cannot be overridden by a pusher: git refuses config writes from
 # receive-pack (R6-Q2).
@@ -13,7 +13,9 @@
 
 [core]
 	hooksPath = /usr/local/lib/gitd/hooks
-	safe.directory = *
+
+[safe]
+	directory = *
 
 [receive]
 	fsckObjects = true
@@ -25,6 +27,3 @@
 
 [pack]
 	threads = 1
-
-[extensions]
-	objectFormat = sha256
