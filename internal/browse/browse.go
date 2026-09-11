@@ -60,6 +60,7 @@ type Handler struct {
 	hostAllowlist map[string]bool
 	tls           *tls.Config
 	log           *slog.Logger
+	etags         *staticETags // memoized content hashes for /static/ assets
 }
 
 // New returns a Handler ready to serve.
@@ -90,6 +91,7 @@ func New(cfg Config) (*Handler, error) {
 		hostAllowlist: allow,
 		tls:           cfg.TLS,
 		log:           cfg.Log,
+		etags:         newStaticETags(),
 	}, nil
 }
 

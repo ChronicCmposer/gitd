@@ -118,6 +118,69 @@ func TestHandleStatic(t *testing.T) {
 	}
 }
 
+func TestStaticCacheHeaders(t *testing.T) {
+	// Real assets (CSS, font, vendored JS) carry a Cache-Control policy and a
+	// content-derived ETag validator on the first (200) response.
+	h := testHandler(t, "server", nil)
+	for _, asset := range []string{
+		"/static/style.css",
+		"/static/fonts/latin-500-normal.woff2",
+		"/static/vendor/marked/12.0.2/marked.min.js",
+	} {
+		rec := get(t, h, asset)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d, want 200", asset, rec.Code)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "public, max-age=86400" {
+			t.Errorf("%s Cache-Control = %q, want public, max-age=86400", asset, got)
+		}
+		if etag := rec.Header().Get("ETag"); etag == "" {
+			t.Errorf("%s missing ETag", asset)
+		}
+	}
+}
+
+func TestStaticETagRevalidation(t *testing.T) {
+	h := testHandler(t, "server", nil)
+	rec := get(t, h, "/static/style.css")
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("style.css missing ETag")
+	}
+
+	// A matching If-None-Match revalidates to 304 without a body.
+	req := httptest.NewRequest(http.MethodGet, "/static/style.css", nil)
+	req.Host = "git.cmposer.cc"
+	req.Header.Set("If-None-Match", etag)
+	rec304 := httptest.NewRecorder()
+	h.Mux().ServeHTTP(rec304, req)
+	if rec304.Code != http.StatusNotModified {
+		t.Errorf("matching ETag = %d, want 304", rec304.Code)
+	}
+
+	// A stale/nonexistent ETag falls through to a full 200.
+	req = httptest.NewRequest(http.MethodGet, "/static/style.css", nil)
+	req.Host = "git.cmposer.cc"
+	req.Header.Set("If-None-Match", `"deadbeef"`)
+	rec200 := httptest.NewRecorder()
+	h.Mux().ServeHTTP(rec200, req)
+	if rec200.Code != http.StatusOK {
+		t.Errorf("stale ETag = %d, want 200", rec200.Code)
+	}
+
+	// A missing asset gets 404 from FileServer without a misleading ETag.
+	missing := get(t, h, "/static/nope.js")
+	if missing.Code != http.StatusNotFound {
+		t.Errorf("missing asset = %d, want 404", missing.Code)
+	}
+	if got := missing.Header().Get("ETag"); got != "" {
+		t.Errorf("missing asset ETag = %q, want empty", got)
+	}
+	if got := missing.Header().Get("Cache-Control"); got != "" {
+		t.Errorf("missing asset Cache-Control = %q, want empty", got)
+	}
+}
+
 func TestSplitHostPort(t *testing.T) {
 	tests := []struct {
 		in      string
