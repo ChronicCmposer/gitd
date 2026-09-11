@@ -364,7 +364,10 @@ func TestStyleSheetPureBlackAppCanvas(t *testing.T) {
 	// surfaces are pure black too (--bg0 #000000) while --bg1 stays the
 	// elevated tone: the served stylesheet must declare both backgrounds,
 	// apply the app background to the body, keep the two depth gradients,
-	// and override the vendored #282828 code-token containers.
+	// and override the vendored #282828 code-token containers. The elevated
+	// surface gradients (.mast, .panel-title) now fade from the near-black
+	// --bg-elevated (#1d2021) into the pure-black canvas instead of the old
+	// --bg1-based gradient.
 	h := testHandler(t, "server", nil)
 	rec := get(t, h, "/static/style.css")
 	if rec.Code != http.StatusOK {
@@ -374,6 +377,8 @@ func TestStyleSheetPureBlackAppCanvas(t *testing.T) {
 	for _, want := range []string{
 		"--bg0: #000000",
 		"--bg-app: #000000",
+		"--bg-elevated: linear-gradient(180deg, #1d2021, #000000);",
+		"background: var(--bg-elevated);",
 		"var(--bg-app)",
 		"rgba(131,165,152,0.08)", // blue depth wash kept
 		"rgba(254,128,25,0.06)",  // orange depth wash kept
@@ -386,6 +391,9 @@ func TestStyleSheetPureBlackAppCanvas(t *testing.T) {
 	}
 	if strings.Contains(body, "--bg0: #282828") {
 		t.Errorf("style.css still declares the old bg0 (#282828)")
+	}
+	if strings.Contains(body, "linear-gradient(180deg, var(--bg1), var(--bg0))") {
+		t.Errorf("style.css still uses the old --bg1 masthead/panel-title gradient")
 	}
 }
 
