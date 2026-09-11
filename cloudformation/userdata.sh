@@ -231,14 +231,18 @@ fi
 # image anymore (the scoped sudoers grant was removed).
 usermod -aG git admin
 
-mkdir -p /srv/git /var/spool/gitd /etc/gitd/tls /etc/gitd/auth_principals
+mkdir -p /srv/git /var/spool/gitd /var/spool/gitd/restore /etc/gitd/tls /etc/gitd/auth_principals
 # admin runs gitd data-plane verbs directly (no sudo; containerd sets
 # NoNewPrivileges), so /var/spool/gitd is setgid git (2770): new spool files
 # and the control socket inherit group git, and admin (a git group member)
 # can list/read events and connect to the socket.
-chown git:git /srv/git /var/spool/gitd
+chown git:git /srv/git /var/spool/gitd /var/spool/gitd/restore
 chmod 0755 /srv/git
 chmod 2770 /var/spool/gitd
+# The restore job spool is writable by both serve (root stages jobs) and the
+# gitd-restore agent (git consumes them + writes results): setgid git 2770,
+# so files created in it inherit group git and stay cross-readable.
+chmod 2770 /var/spool/gitd/restore
 mkdir -p /home/admin && chown admin:admin /home/admin && chmod 0700 /home/admin
 
 # --- configs verbatim from the deployment bundle (R13-Q4) --------------------------
@@ -556,6 +560,39 @@ Restart=always
 RestartSec=5
 SSHD_SERVICE_EOF
 
+cat > /etc/systemd/system/gitd-restore.service <<'RESTORE_SERVICE_EOF'
+[Unit]
+# Runs as the git user (uid/gid 1001, the repo-store owner) — NO elevated
+# caps: containerd/runc does not put caps into a non-root process's EFFECTIVE
+# set, and the agent only reads its ro config mounts and writes the
+# git-owned /srv/git + /var/spool/gitd rw mounts. gitd-serve stages restore
+# jobs in /var/spool/gitd/restore; this agent scan-then-watches that dir,
+# re-verifies the staged bundle, and writes /srv/git/<repo>.git via the
+# mirror (serve keeps /srv/git rbind:ro).
+Description=gitd restore agent (git-context, no elevated caps)
+After=gitd-serve.service containerd.service
+Requires=containerd.service
+
+[Service]
+ExecStart=/usr/local/bin/ctr run --rm --net-host \
+  --read-only \
+  --user 1001:1001 \
+  --cap-drop CAP_CHOWN --cap-drop CAP_DAC_OVERRIDE --cap-drop CAP_FSETID \
+  --cap-drop CAP_FOWNER --cap-drop CAP_MKNOD --cap-drop CAP_NET_RAW \
+  --cap-drop CAP_SETGID --cap-drop CAP_SETUID --cap-drop CAP_SETFCAP \
+  --cap-drop CAP_SETPCAP --cap-drop CAP_SYS_CHROOT --cap-drop CAP_KILL \
+  --cap-drop CAP_AUDIT_WRITE --cap-drop CAP_NET_BIND_SERVICE \
+  --memory-limit 134217728 \
+  --mount type=bind,source=/srv/git,destination=/srv/git,options=rbind:rw \
+  --mount type=bind,source=/var/spool/gitd,destination=/var/spool/gitd,options=rbind:rw \
+  --mount type=bind,source=/etc/gitd,destination=/etc/gitd,options=rbind:ro \
+  --mount type=bind,source=/etc/resolv.conf,destination=/etc/resolv.conf,options=rbind:ro \
+  --mount type=bind,source=/etc/hosts,destination=/etc/hosts,options=rbind:ro \
+  git.cmposer.cc/gitd:latest gitd-restore /usr/local/bin/gitd mirror-agent --config /etc/gitd/gitd.yaml
+Restart=always
+RestartSec=5
+RESTORE_SERVICE_EOF
+
 cat > /etc/systemd/system/gitd-ddns.service <<'DDNS_SERVICE_EOF'
 [Unit]
 Description=gitd Namecheap dynamic DNS refresh (one-shot)
@@ -600,6 +637,10 @@ systemctl enable --now gitd-serve.service
 systemctl disable --now sshd.socket sshd.service 2>/dev/null || true
 systemctl mask sshd.socket sshd.service 2>/dev/null || true
 systemctl enable --now gitd-sshd.service
+# The restore agent is a background role: it watches /var/spool/gitd/restore
+# and performs git-context restores staged by gitd-serve. Ordered after serve
+# so the spool exists before the agent starts watching.
+systemctl enable --now gitd-restore.service
 systemctl enable --now gitd-ddns.timer
 
 # --- host gitd-cert-sync hourly timer (R12-Q6) --------------------------------------
