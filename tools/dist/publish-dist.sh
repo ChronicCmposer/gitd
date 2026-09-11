@@ -2,11 +2,11 @@
 # tools/dist/publish-dist.sh — publish a determinism-checked artifact.
 #
 # Usage:
-#   tools/dist/publish-dist.sh <product>    # openssh|git|fish|sudo|ca-certs|containerd|runc
+#   tools/dist/publish-dist.sh <product>    # openssh|git|fish|ca-certs|containerd|runc
 #
 # Publishes the product tarball from tools/dist/out to:
 #   - GitHub Releases:      ChronicCmposer/gitd family release tag
-#                           (openssh-dist, git-dist, fish-dist, sudo-dist,
+#                           (openssh-dist, git-dist, fish-dist,
 #                           ca-certs-dist, containerd-dist, runc-dist —
 #                           strimserver family-tag strategy on the PRIMARY repo)
 #   - S3 fallback:          s3://git.cmposer.cc/<prefix>/<asset>
@@ -42,7 +42,6 @@ case "${product}" in
     openssh)    version="${OPENSSH_VERSION}"    ; prefix="openssh"     ; asset_name="openssh"        ; family="openssh-dist" ;;
     git)        version="${GIT_VERSION}"        ; prefix="git"         ; asset_name="git"            ; family="git-dist" ;;
     fish)       version="${FISH_VERSION}"        ; prefix="fish"       ; asset_name="fish"           ; family="fish-dist" ;;
-    sudo)       version="${SUDO_VERSION}"        ; prefix="sudo"       ; asset_name="sudo"           ; family="sudo-dist" ;;
     ca-certs)   version="${CA_CERTS_VERSION}"    ; prefix="ca-certs"   ; asset_name="ca-certificates"; family="ca-certs-dist" ;;
     containerd) version="${CONTAINERD_VERSION}"  ; prefix="containerd" ; asset_name="containerd"     ; family="containerd-dist" ;;
     runc)       version="${RUNC_VERSION}"        ; prefix="containerd" ; asset_name="runc"           ; family="runc-dist" ;;

@@ -2,7 +2,7 @@
 # tools/dist/check-dist.sh — build-twice determinism check for one product.
 #
 # Usage:
-#   tools/dist/check-dist.sh <product>    # openssh|git|fish|sudo|ca-certs|containerd|runc|pinned-go
+#   tools/dist/check-dist.sh <product>    # openssh|git|fish|ca-certs|containerd|runc|pinned-go
 #
 # The product build runs twice into two separate output dirs; the resulting
 # tarballs must be byte-identical (same sha256) or the check fails loudly.
@@ -26,12 +26,11 @@ case "${product}" in
     openssh)    build_script="build-openssh.sh"    ; version="${OPENSSH_VERSION}" ;;
     git)        build_script="build-git.sh"        ; version="${GIT_VERSION}" ;;
     fish)       build_script="build-fish.sh"       ; version="${FISH_VERSION}" ;;
-    sudo)       build_script="build-sudo.sh"       ; version="${SUDO_VERSION}" ;;
     ca-certs)   build_script="build-ca-certs.sh"   ; version="${CA_CERTS_VERSION}" ;;
     containerd) build_script="build-containerd.sh" ; version="${CONTAINERD_VERSION}" ;;
     runc)       build_script="build-runc.sh"       ; version="${RUNC_VERSION}" ;;
     pinned-go)  build_script="build-pinned-go.sh"  ; version="${GO_VERSION}" ;;
-    *) die "unknown product '${product}'; expected openssh|git|fish|sudo|ca-certs|containerd|runc|pinned-go" ;;
+    *) die "unknown product '${product}'; expected openssh|git|fish|ca-certs|containerd|runc|pinned-go" ;;
 esac
 
 script="${DIST_DIR}/${build_script}"

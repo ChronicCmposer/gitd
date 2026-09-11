@@ -31,7 +31,6 @@ product_asset() {
         openssh)    echo "openssh-${OPENSSH_VERSION}.linux-${HOST_ARCH}.tar.gz" ;;
         git)        echo "git-${GIT_VERSION}.linux-${HOST_ARCH}.tar.gz" ;;
         fish)       echo "fish-${FISH_VERSION}.linux-${HOST_ARCH}.tar.gz" ;;
-        sudo)       echo "sudo-${SUDO_VERSION}.linux-${HOST_ARCH}.tar.gz" ;;
         ca-certs)   echo "ca-certificates-${CA_CERTS_VERSION}.linux-${HOST_ARCH}.tar.gz" ;;
         containerd) echo "containerd-${CONTAINERD_VERSION}.linux-${HOST_ARCH}.tar.gz" ;;
         runc)       echo "runc-${RUNC_VERSION}.linux-${HOST_ARCH}.tar.gz" ;;
@@ -42,7 +41,7 @@ product_asset() {
 # For each product with a built tarball, compute the sha256 and update the
 # PIN_<PRODUCT>_<ARCH> line in dist_pins.bzl. The variable name is fully
 # upper-cased with '-' -> '_' (PIN_CA_CERTS_ARM64, PIN_OPENSSH_AMD64, ...).
-for product in openssh git fish sudo ca-certs containerd runc; do
+for product in openssh git fish ca-certs containerd runc; do
     asset="${OUT_DIR}/$(product_asset "${product}")"
     [[ -f "${asset}" ]] || { echo "gitd: gen-dist-pins: ${product}: no tarball at ${asset}; pin unchanged"; continue; }
     sha="$(sha256_of "${asset}")"

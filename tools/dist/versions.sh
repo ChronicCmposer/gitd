@@ -46,11 +46,6 @@ FISH_VERSION="4.9.3"
 FISH_URL="https://github.com/fish-shell/fish-shell/releases/download/${FISH_VERSION}/fish-${FISH_VERSION}.tar.xz"
 FISH_SHA256=""                              # filled from the tarball by check-dist
 
-# --- sudo (image admin elevation; R8-Q1) ------------------------------------------
-SUDO_VERSION="1.9.17p2"
-SUDO_URL="https://github.com/sudo-project/sudo/releases/download/v${SUDO_VERSION}/sudo-${SUDO_VERSION}.tar.gz"
-SUDO_SHA256=""                              # filled from the tarball by check-dist
-
 # --- ca-certificates (image TLS trust store; R7-Q2) --------------------------------
 # The apk package ships the mozilla bundle; the post-install step generates
 # /etc/ssl/certs/* (hashed symlinks + ca-certificates.crt). Pinned exactly.

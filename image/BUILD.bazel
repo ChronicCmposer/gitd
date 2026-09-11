@@ -2,9 +2,9 @@
 #
 # rules_oci oci_image built from:
 #   - the in-repo filesystem files under fs/ (passwd, group, sshd_config,
-#     system gitconfig, sudoers, ...);
+#     system gitconfig, ...);
 #   - the pinned dist tarballs (@openssh_dist, @git_dist, @fish_dist,
-#     @sudo_dist, @ca_certs_dist) layered at their natural paths;
+#     @ca_certs_dist) layered at their natural paths;
 #   - the gitd binary + the static hook shims + nologin built from Go.
 #
 # tags = ["manual"]: the image needs the published dist tarballs (dist.bzl
@@ -24,21 +24,8 @@ package(default_visibility = ["//visibility:public"])
 # all root:root 0644 (R6-Q5).
 pkg_tar(
     name = "etc_fs_tar",
-    srcs = glob(
-        ["fs/etc/**"],
-        exclude = ["fs/etc/sudoers"],
-    ),
+    srcs = glob(["fs/etc/**"]),
     mode = "0644",
-    owner = "0.0",
-    package_dir = "/",
-    strip_prefix = "fs",
-)
-
-# sudoers must be 0440 (sudo refuses world-writable sudoers) (R8-Q1).
-pkg_tar(
-    name = "sudoers_tar",
-    srcs = ["fs/etc/sudoers"],
-    mode = "0440",
     owner = "0.0",
     package_dir = "/",
     strip_prefix = "fs",
@@ -70,14 +57,6 @@ genrule(
     srcs = ["@fish_dist//:artifact.tar.gz"],
     outs = ["fish_layer.tar"],
     cmd = "mkdir -p layer && tar -xzf \"$(location @fish_dist//:artifact.tar.gz)\" -C layer && tar -cf \"$@\" --sort=name --owner=0 --group=0 --numeric-owner -C layer .",
-    tags = ["manual"],
-)
-
-genrule(
-    name = "sudo_layer",
-    srcs = ["@sudo_dist//:artifact.tar.gz"],
-    outs = ["sudo_layer.tar"],
-    cmd = "mkdir -p layer && tar -xzf \"$(location @sudo_dist//:artifact.tar.gz)\" -C layer && tar -cf \"$@\" --sort=name --owner=0 --group=0 --numeric-owner -C layer .",
     tags = ["manual"],
 )
 
@@ -153,13 +132,11 @@ oci_image(
     tags = ["manual"],
     tars = [
         ":etc_fs_tar",
-        ":sudoers_tar",
         ":dirs_tar",
         ":ca_certs_layer",
         ":openssh_layer",
         ":git_layer",
         ":fish_layer",
-        ":sudo_layer",
         ":bin_tar",
     ],
     # Host keys, TrustedUserCAKeys, revoked_keys are provisioned at deploy

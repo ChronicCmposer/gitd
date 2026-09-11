@@ -224,6 +224,12 @@ else
     fi
     useradd -u 1001 -g 1001 -c "gitd git gateway" -d /var/spool/gitd -s /usr/sbin/nologin git
 fi
+# admin is a git group member (gid 1001, guaranteed above): the control socket
+# is 0770 git:git and /var/spool/gitd is setgid git, so admin can connect to
+# the serve socket and list/read the data-plane material. gitd mirror restore
+# routes through that socket (serve owns /srv/git); no sudo exists in the
+# image anymore (the scoped sudoers grant was removed).
+usermod -aG git admin
 
 mkdir -p /srv/git /var/spool/gitd /etc/gitd/tls /etc/gitd/auth_principals
 # admin runs gitd data-plane verbs directly (no sudo; containerd sets

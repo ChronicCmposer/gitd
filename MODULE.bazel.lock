@@ -259,7 +259,7 @@
   "moduleExtensions": {
     "//:dist.bzl%dist": {
       "general": {
-        "bzlTransitiveDigest": "YfqN95uN8xlpJYEHT17ff5sNugjW6bOKwx8ioazTjYI=",
+        "bzlTransitiveDigest": "vQ6DJtK5wsCSEw/sB6D1/KJ9/3PdNmY+vpdZ76lmq8k=",
         "usagesDigest": "s6U9n4Khr0gUS1QYkwKwoqMXdKkGikvFObPN3QKasj4=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
@@ -301,20 +301,6 @@
               "sha256s": {
                 "amd64": "0000000000000000000000000000000000000000000000000000000000000000",
                 "arm64": "b7d4a38c7114b49f07c32d5c808ef3294730f8e2ee4e555de7f9b6d51c7e35f5"
-              },
-              "build_file": "exports_files(\n    [\"artifact.tar.gz\"],\n    visibility = [\"//visibility:public\"],\n)\n"
-            }
-          },
-          "sudo_dist": {
-            "repoRuleId": "@@//:dist.bzl%dist_artifact",
-            "attributes": {
-              "urls": [
-                "https://github.com/ChronicCmposer/gitd/releases/download/sudo-dist/sudo-1.9.17p2.linux-{arch}.tar.gz",
-                "https://s3.us-east-2.amazonaws.com/git.cmposer.cc/sudo/sudo-1.9.17p2.linux-{arch}.tar.gz"
-              ],
-              "sha256s": {
-                "amd64": "0000000000000000000000000000000000000000000000000000000000000000",
-                "arm64": "37455839575998f2fcb303036d07aa5d9baab02d65ec4b230863edb02cbb2b42"
               },
               "build_file": "exports_files(\n    [\"artifact.tar.gz\"],\n    visibility = [\"//visibility:public\"],\n)\n"
             }

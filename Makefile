@@ -9,11 +9,11 @@ DIST := tools/dist
 MUTATION := tools/mutation
 
 .PHONY: build test fuzz lint fmt-check mutate mutate-ci coverage \
-        check-openssh-dist check-git-dist check-fish-dist check-sudo-dist \
+        check-openssh-dist check-git-dist check-fish-dist \
         check-ca-certs-dist check-containerd-dist check-runc-dist \
         check-pinned-go-dist check-openssh-dist-deps gen-dist-pins \
         publish-openssh-dist publish-git-dist publish-fish-dist \
-        publish-sudo-dist publish-ca-certs-dist publish-containerd-dist \
+        publish-ca-certs-dist publish-containerd-dist \
         publish-runc-dist image image-container deploy update create-bucket \
         check-deps version bump-version release
 
@@ -71,9 +71,6 @@ check-git-dist: ## Determinism check for the git artifact.
 check-fish-dist: ## Determinism check for the fish artifact.
 	$(DIST)/check-dist.sh fish
 
-check-sudo-dist: ## Determinism check for the sudo artifact.
-	$(DIST)/check-dist.sh sudo
-
 check-ca-certs-dist: ## Determinism check for the ca-certificates artifact.
 	$(DIST)/check-dist.sh ca-certs
 
@@ -119,9 +116,6 @@ publish-git-dist: ## Publish the git dist artifact to GitHub + S3.
 
 publish-fish-dist: ## Publish the fish dist artifact to GitHub + S3.
 	$(DIST)/publish-dist.sh fish
-
-publish-sudo-dist: ## Publish the sudo dist artifact to GitHub + S3.
-	$(DIST)/publish-dist.sh sudo
 
 publish-ca-certs-dist: ## Publish the ca-certificates dist artifact to GitHub + S3.
 	$(DIST)/publish-dist.sh ca-certs
