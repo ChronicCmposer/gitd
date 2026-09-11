@@ -82,7 +82,7 @@ func TestDecodeRejectsUnknownAndNewerSchema(t *testing.T) {
 	}
 	for i, data := range bad {
 		path := filepath.Join(dir, "bad"+string(rune('0'+i))+".json")
-		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(data), 0o640); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.Read("bad" + string(rune('0'+i))); err == nil {
@@ -228,7 +228,7 @@ func TestCatchUp(t *testing.T) {
 func TestWriteFSyncDiscipline(t *testing.T) {
 	s := testStore(t, time.Now)
 	// The fsync sequence (file -> rename -> parent dir) is exercised by Write;
-	// this test asserts the file exists with 0600 perms (R4-Q11).
+	// this test asserts the file exists with 0640 perms (R4-Q11).
 	id, err := s.Write(testEvent())
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func TestWriteFSyncDiscipline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != 0o600 {
-		t.Errorf("spool file mode = %v, want 0600", st.Mode().Perm())
+	if st.Mode().Perm() != 0o640 {
+		t.Errorf("spool file mode = %v, want 0640", st.Mode().Perm())
 	}
 }

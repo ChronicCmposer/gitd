@@ -212,7 +212,9 @@ func (s *Store) writeAtomic(path string, rec *Record) error {
 		_ = os.Remove(tmpName)
 	}
 
-	if err := tmp.Chmod(0o600); err != nil {
+	// 0640: the git group (admin data-plane) lists/reads spool events
+	// (R9-Q11); the setgid /var/spool/gitd makes the group git.
+	if err := tmp.Chmod(0o640); err != nil {
 		cleanup()
 		return fmt.Errorf("chmod temp: %w", err)
 	}

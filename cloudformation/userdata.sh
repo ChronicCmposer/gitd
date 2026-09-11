@@ -226,9 +226,13 @@ else
 fi
 
 mkdir -p /srv/git /var/spool/gitd /etc/gitd/tls /etc/gitd/auth_principals
+# admin runs gitd data-plane verbs directly (no sudo; containerd sets
+# NoNewPrivileges), so /var/spool/gitd is setgid git (2770): new spool files
+# and the control socket inherit group git, and admin (a git group member)
+# can list/read events and connect to the socket.
 chown git:git /srv/git /var/spool/gitd
 chmod 0755 /srv/git
-chmod 0700 /var/spool/gitd
+chmod 2770 /var/spool/gitd
 mkdir -p /home/admin && chown admin:admin /home/admin && chmod 0700 /home/admin
 
 # --- configs verbatim from the deployment bundle (R13-Q4) --------------------------
@@ -327,11 +331,12 @@ ssm_get probe/client.key       > /etc/gitd/tls/probe.key
 
 # --- /etc/gitd ownership matrix (R6-Q5) -------------------------------------------
 chown root:git  /etc/gitd/gitd.yaml && chmod 0640 /etc/gitd/gitd.yaml
-chown git:git   /etc/gitd/webhooks.yaml && chmod 0600 /etc/gitd/webhooks.yaml
+# admin (git group) reads webhooks.yaml for `gitd spool replay`.
+chown git:git   /etc/gitd/webhooks.yaml && chmod 0640 /etc/gitd/webhooks.yaml
 # gitd-serve now runs as root (commit 8ce38ec): containerd/runc does not put
 # CAP_NET_BIND_SERVICE into a non-root process's EFFECTIVE set, so root is
 # required to bind privileged :443; CAP_DAC_OVERRIDE lets root read/write the
-# gitd material (/var/spool/gitd is git:git 0700). The root:git 0640 grants
+# gitd material (/var/spool/gitd is git:git 2770). The root:git 0640 grants
 # below are now redundant but harmless (they pin group read on the browse TLS
 # files). probe/ssh/ddns material stays root-only (serve never reads it).
 chown root:git /etc/gitd/tls && chmod 0750 /etc/gitd/tls

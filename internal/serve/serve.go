@@ -146,6 +146,13 @@ func (s *Serve) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("serve: listen %s: %w", s.socketPath, err)
 	}
+	// Allow the git group (admin data-plane) to connect to the control socket
+	// (R9-Q11); the setgid /var/spool/gitd makes the group git, so 0770 grants
+	// git+admin read/write without opening it to everyone.
+	if err := os.Chmod(s.socketPath, 0o770); err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("serve: chmod socket %s: %w", s.socketPath, err)
+	}
 	s.httpSrv = &http.Server{Handler: s.handler(), ReadHeaderTimeout: readHeaderTO}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- s.httpSrv.Serve(ln) }()
