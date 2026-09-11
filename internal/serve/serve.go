@@ -5,10 +5,12 @@
 //
 // Delivery executes through the injected Deliver seam (a func built from the
 // webhook plugin registry); unknown plugin-ids reply 404-style (R13-Q8). The
-// same control mux (/v1/bundle, /v1/deliver) is exposed via SocketHandler so
-// the browse :443 mux can mount it (Phase 5). All channel submissions wait up
-// to 10s for a slot then reply 503 busy (R12-Q1); notify's 60s socket client
-// timeout (R11-Q3) is the outer bound.
+// control mux (/v1/bundle, /v1/deliver, /v1/restore) is served on the unix
+// socket; the browse :443 mux mounts only /v1/bundle + /v1/deliver (Phase 5),
+// so /v1/restore stays socket-only — the serve-owned /srv/git write path never
+// appears on :443. All channel submissions wait up to 10s for a slot then
+// reply 503 busy (R12-Q1); notify's 60s socket client timeout (R11-Q3) is the
+// outer bound.
 package serve
 
 import (
@@ -185,9 +187,11 @@ func (s *Serve) Run(ctx context.Context) error {
 func (s *Serve) Submit(act func(*Serve)) error { return s.submit(act) }
 
 // SocketHandler returns the mux for the socket control endpoints (/v1/bundle,
-// /v1/deliver). It is mounted on the unix-socket server (Run) and behind the
-// browse :443 mux (Phase 5) so both paths keep the actions-channel discipline
-// and the R13-Q9 read-header/body caps.
+// /v1/deliver, /v1/restore). It is mounted on the unix-socket server (Run)
+// and, at only the /v1/bundle + /v1/deliver paths, behind the browse :443 mux
+// (Phase 5) — /v1/restore is deliberately socket-only, so the serve-owned
+// /srv/git write path is never reachable from :443. Both paths keep the
+// actions-channel discipline and the R13-Q9 read-header/body caps.
 func (s *Serve) SocketHandler() http.Handler { return s.handler() }
 
 // submit queues act for the worker, waiting up to submitWait (R12-Q1). It
@@ -365,6 +369,17 @@ func (s *Serve) bundleAction(repoName string) (mirror.BundleResult, error) {
 	return result, fmt.Errorf("serve: bundle %s: %w", repoName, err)
 }
 
+// restoreAction restores repo into its canonical bare path via the mirror.
+// Serve owns /srv/git, so the restored repo lands git-owned without admin
+// elevation. Runs inside the worker so restore is serialized with all other
+// serve work (global FIFO).
+func (s *Serve) restoreAction(repoName string) error {
+	if err := s.mirror.Restore(context.Background(), repoName); err != nil {
+		return fmt.Errorf("serve: restore %s: %w", repoName, err)
+	}
+	return nil
+}
+
 // unlinkStaleSocket removes a leftover socket from an unclean shutdown, only
 // when it is a socket owned by the git user (R12-Q4).
 func (s *Serve) unlinkStaleSocket() error {
@@ -394,6 +409,7 @@ func (s *Serve) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/bundle", s.handleBundle)
 	mux.HandleFunc("/v1/deliver", s.handleDeliver)
+	mux.HandleFunc("/v1/restore", s.handleRestore)
 	return mux
 }
 
@@ -490,6 +506,40 @@ func (s *Serve) pluginConfigured(id string) bool {
 		}
 	}
 	return false
+}
+
+// handleRestore serves POST /v1/restore: a synchronous mirror restore in the
+// channel (the serve-owned /srv/git write path). 200 on success; 400 invalid
+// repo / bad body; 503 busy when the channel is full (R12-Q1); 500 on restore
+// failure.
+func (s *Serve) handleRestore(w http.ResponseWriter, r *http.Request) {
+	var req socket.RestoreRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !repo.ValidName(req.Repo) {
+		http.Error(w, "invalid repo name", http.StatusBadRequest)
+		return
+	}
+
+	reply := make(chan error, 1)
+	act := func(sv *Serve) { reply <- sv.restoreAction(req.Repo) }
+	if err := s.submit(act); err != nil {
+		writeServeError(w, err)
+		return
+	}
+	select {
+	case err := <-reply:
+		if err != nil {
+			writeServeError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	case <-r.Context().Done():
+		// Client disconnected; the restore action still completes and the
+		// buffered reply is discarded.
+	}
 }
 
 // decodeStrict decodes a JSON body with DisallowUnknownFields (parse-don't-

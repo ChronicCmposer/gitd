@@ -1,8 +1,8 @@
 // Package socket is the HTTP-over-unix-socket submission seam between gitd
-// subprocesses (notify, spool replay) and the gitd-serve actions channel
-// (R9-Q11, R10-Q2, R12-Q2). The server side (POST /v1/bundle, POST
-// /v1/deliver) lives in internal/serve (Phase 4); this client is the single
-// submission path Phase 3 callers use.
+// subprocesses (notify, spool replay, mirror restore) and the gitd-serve
+// actions channel (R9-Q11, R10-Q2, R12-Q2). The server side (POST /v1/bundle,
+// POST /v1/deliver, POST /v1/restore) lives in internal/serve (Phase 4); this
+// client is the single submission path Phase 3 callers use.
 package socket
 
 import (
@@ -123,4 +123,36 @@ func trim(s string) string {
 		return s[:200] + "..."
 	}
 	return s
+}
+
+// RestoreRequest is the POST /v1/restore body (serve-owned mirror restore).
+type RestoreRequest struct {
+	Repo string `json:"repo"`
+}
+
+// Restore submits a synchronous mirror restore of repo to serve over the
+// socket. Serve owns /srv/git, so the restored repo lands git-owned without
+// any admin elevation. Any non-2xx reply is an error: the CLI surfaces it so
+// the operator knows the restore failed.
+func (c *Client) Restore(ctx context.Context, repo string) error {
+	body, err := json.Marshal(RestoreRequest{Repo: repo})
+	if err != nil {
+		return fmt.Errorf("socket restore: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://gitd/v1/restore", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("socket restore: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpc.Do(req)
+	if err != nil {
+		return fmt.Errorf("socket %s /v1/restore: %w", c.path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		reply, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("socket /v1/restore: %s: %s", resp.Status, trim(string(reply)))
+	}
+	return nil
 }

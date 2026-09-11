@@ -165,6 +165,29 @@ func TestServeBundleUpload(t *testing.T) {
 	}
 }
 
+func TestServeRestoreRoundTrip(t *testing.T) {
+	// End-to-end over a real unix socket: the restore client submits to the
+	// serve handler, which restores the canonical repo path (serve owns
+	// /srv/git). Seed a bundle, drop the live repo, then restore it back.
+	srv, _, _ := testServe(t, nil)
+	makeBareRepo(t, srv.reposRoot, "r")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(srv.reposRoot, "r.git")); err != nil {
+		t.Fatal(err)
+	}
+	runServe(t, srv)
+
+	c := socket.NewClient(srv.socketPath, 5*time.Second)
+	if err := c.Restore(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(srv.reposRoot, "r.git")); err != nil {
+		t.Errorf("restored repo missing: %v", err)
+	}
+}
+
 func TestServeZeroRefSkip(t *testing.T) {
 	srv, _, _ := testServe(t, nil)
 	git := testGit(t)

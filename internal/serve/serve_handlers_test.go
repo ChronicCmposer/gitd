@@ -109,6 +109,70 @@ func TestHandleDeliverBusy(t *testing.T) {
 	}
 }
 
+func TestHandleRestoreInvalidRepo(t *testing.T) {
+	srv, _, _ := testServe(t, nil)
+	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":".bad"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid repo status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleRestoreBadJSON(t *testing.T) {
+	srv, _, _ := testServe(t, nil)
+	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad json status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleRestoreBusy(t *testing.T) {
+	srv, _, _ := testServe(t, nil)
+	restore := TestSetSubmitWait(5 * time.Millisecond)
+	defer restore()
+	for i := 0; i < 64; i++ {
+		srv.actions <- func(*Serve) {}
+	}
+	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":"r"}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("busy status = %d, want 503 (R12-Q1)", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "busy") {
+		t.Errorf("busy body = %q", rec.Body.String())
+	}
+}
+
+func TestHandleRestoreFailure(t *testing.T) {
+	// A repo with no bundles: Restore fails after git init and the handler
+	// maps the failure to 500 via writeServeError.
+	srv, _, _ := testServe(t, nil)
+	srv.startWorker()
+	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":"ghost"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("restore failure status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleRestoreOK(t *testing.T) {
+	// Seed a bundle for r, remove the live repo, then restore through the
+	// handler: the canonical path must come back and the reply must be 200.
+	srv, _, _ := testServe(t, nil)
+	makeBareRepo(t, srv.reposRoot, "r")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(srv.reposRoot, "r.git")); err != nil {
+		t.Fatal(err)
+	}
+	srv.startWorker()
+	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":"r"}`)
+	if rec.Code != http.StatusOK {
+		t.Errorf("restore status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(srv.reposRoot, "r.git")); err != nil {
+		t.Errorf("restored repo missing: %v", err)
+	}
+}
+
 func TestDeliverAllActionNoPlugins(t *testing.T) {
 	srv, _, _ := testServe(t, nil)
 	srv.deliverAllAction("ev1")(srv) // no plugins: logs and returns
