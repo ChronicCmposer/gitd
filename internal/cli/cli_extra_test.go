@@ -218,6 +218,36 @@ func TestRunMirrorListPath(t *testing.T) {
 	}
 }
 
+func TestRunMirrorAgentUsage(t *testing.T) {
+	// mirror-agent is a daemon role: extra arguments are a usage error.
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"mirror-agent", "extra"}, &stdout, &stderr); code != ExitUsage {
+		t.Errorf("exit = %d, want %d (stderr: %s)", code, ExitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "mirror-agent takes no arguments") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunMirrorAgentBadConfig(t *testing.T) {
+	// A missing config fails at runtime (exit 1), not usage.
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"mirror-agent", "--config", "/nonexistent/gitd.yaml"}, &stdout, &stderr); code != ExitError {
+		t.Errorf("exit = %d, want %d (stderr: %s)", code, ExitError, stderr.String())
+	}
+}
+
+func TestRunMirrorAgentListedInUsage(t *testing.T) {
+	// The daemon role appears in the top-level usage listing.
+	var stdout, stderr bytes.Buffer
+	if code := Run(nil, &stdout, &stderr); code != ExitUsage {
+		t.Fatalf("exit = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr.String(), "mirror-agent") {
+		t.Errorf("usage = %q, want mirror-agent listed", stderr.String())
+	}
+}
+
 func TestRunMirrorRestoreSubmitsToSocket(t *testing.T) {
 	// restore must submit to the serve socket and must NOT build the S3
 	// store: the config below has no storage section, so a storeFor attempt

@@ -7,6 +7,7 @@ go_library(
         "common.go",
         "ddns.go",
         "mirror.go",
+        "mirror_agent.go",
         "notify.go",
         "pre_receive.go",
         "serve.go",

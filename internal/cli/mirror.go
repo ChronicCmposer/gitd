@@ -18,17 +18,20 @@ import (
 )
 
 // restoreTimeout bounds a socket mirror-restore round-trip (5 minutes: serve
-// downloads + verifies + unbundles a bundle under /srv/git). A fixed constant
-// so the CLI never hangs on a wedged serve.
+// downloads + verifies + stages a bundle, the gitd-restore agent restores it,
+// and serve waits for the result). A fixed constant so the CLI never hangs on
+// a wedged serve.
 const restoreTimeout = 5 * time.Minute
 
 // runMirror inspects and manages S3 bundle mirrors (3.4): list [<repo>] emits
 // NDJSON {repo, bundles:[...]} (R13-Q6) — with no <repo> it emits one object
 // per mirrored repo — delete <repo> removes every bundle (R6-Q9), and
 // restore <repo> restores from the latest bundle into /srv/git/<repo>.git
-// (R8-Q2, R11-Q5). Restore is serve-owned and routes through the serve socket
-// (POST /v1/restore): serve writes /srv/git, so the admin never needs
-// elevation. list/delete run directly as admin (they only touch S3). Bare
+// (R8-Q2, R11-Q5). Restore routes through the serve socket (POST
+// /v1/restore): serve downloads + verifies the bundle and stages a restore
+// job for the gitd-restore mirror-agent, which performs the /srv/git write
+// as git — so the admin never needs elevation and serve never writes
+// /srv/git. list/delete run directly as admin (they only touch S3). Bare
 // `gitd mirror` and `gitd mirror help` print the subcommand reference.
 func runMirror(args []string, stdout, stderr io.Writer) error {
 	cfg, rest, err := parseConfigFlag(args)
@@ -75,9 +78,11 @@ func runMirror(args []string, stdout, stderr io.Writer) error {
 
 	switch sub {
 	case "restore":
-		// Restore is serve-owned: submit to the serve socket, which writes
-		// /srv/git as the serve process. No S3 store or mirror is built here,
-		// and the admin never needs elevation.
+		// Restore is serve-orchestrated: submit to the serve socket, which
+		// downloads + verifies the bundle and stages a job for the
+		// gitd-restore agent (the agent performs the /srv/git write as git).
+		// No S3 store or mirror is built here, and the admin never needs
+		// elevation.
 		return mirrorRestore(subArgs[0])
 	}
 
@@ -106,16 +111,18 @@ func runMirror(args []string, stdout, stderr io.Writer) error {
 }
 
 // mirrorRestore submits a mirror restore of repo to the serve socket. Serve
-// owns /srv/git, so the restored repo lands git-owned without admin elevation.
-// The 5-minute client timeout bounds a long restore; serve down fails loudly.
+// downloads + verifies the bundle and dispatches the restore to the
+// gitd-restore mirror-agent, which writes /srv/git/<repo>.git as git — no
+// admin elevation, and serve never writes /srv/git. The 5-minute client
+// timeout bounds a long restore; serve down fails loudly.
 func mirrorRestore(repoName string) error {
 	return socket.NewClient(socketPath, restoreTimeout).Restore(context.Background(), repoName)
 }
 
 // mirrorUsageText renders the gitd mirror subcommand reference: list with no
-// <repo> enumerates every mirrored repo; restore is serve-owned, always
-// targets /srv/git/<repo>.git, and runs through the serve socket (no dest
-// arg, no sudo).
+// <repo> enumerates every mirrored repo; restore always targets
+// /srv/git/<repo>.git, routes through the serve socket, and is performed by
+// the gitd-restore agent (no dest arg, no sudo).
 func mirrorUsageText() string {
 	return `usage: gitd mirror <command> [args]
 
@@ -124,8 +131,9 @@ commands:
                         repo that has mirrors (one NDJSON object per repo)
   delete <repo>         delete all bundle mirrors for <repo>
   restore <repo>        restore <repo> from its latest bundle into
-                        /srv/git/<repo>.git (serve-owned: submitted to the
-                        gitd-serve socket, which writes /srv/git as serve)
+                        /srv/git/<repo>.git (submitted to the gitd-serve
+                        socket; serve stages the job and the gitd-restore
+                        agent writes /srv/git as git)
 
 exit codes: 0 ok, 1 runtime error, 2 usage error
 `
