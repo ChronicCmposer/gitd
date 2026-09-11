@@ -15,7 +15,7 @@ ssh-ca init                      # create the CA keypair + cert in ~/.ssh/gitd-c
 ssh-ca issue-user [--admin] KEY  # 90d user cert; --admin -> principals git,admin
 ssh-ca issue-host [OUT_DIR]      # Ed25519 host key + 1y host cert (principal git.cmposer.cc only)
 ssh-ca renew CERT                # re-issue with a fresh window (same CA)
-ssh-ca revoke KEY                # append key to /etc/ssh/revoked_keys (needs root/sudo)
+ssh-ca revoke KEY                # append key to THIS box's /etc/ssh/revoked_keys (local record only)
 ```
 
 ### init
@@ -41,8 +41,13 @@ identity and principals. Used for SSH user-cert renewal and the annual
 host-cert renewal that rides `update.sh` (R12-Q6).
 
 ### revoke
-Appends an Ed25519 public key to `/etc/ssh/revoked_keys` (R2-Q4). Needs write
-access to `/etc/ssh` (root, or the admin user's passwordless sudo).
+Appends an Ed25519 public key to **this box's** `/etc/ssh/revoked_keys`
+(R2-Q4). This is a **local record only** — it does NOT reach git.cmposer.cc.
+To actually revoke a key against the server, append it to the host's
+`/etc/gitd/revoked_keys` from the SSM host shell (the sshd container mounts
+that file read-only as `/etc/ssh/revoked_keys`, and sshd re-reads it per
+authentication); see `docs/cert-renewal.md`. Needs write access to `/etc/ssh`
+on this box.
 
 ## Client setup (6.3)
 

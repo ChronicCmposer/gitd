@@ -111,17 +111,25 @@ accepted automatically as long as it chains to the same CA.
 
 ## 4. Revocation (R2-Q4)
 
-To refuse a specific key through the SSH CA, append it to the host's
-`/etc/ssh/revoked_keys` (which `sshd_config` activates via `RevokedKeys`). The
-tool does this for you and refuses duplicates:
+To refuse a specific key through the SSH CA, append its public key to the
+**host's** `/etc/gitd/revoked_keys` — the sshd container mounts `/etc/gitd`
+over `/etc/ssh` read-only (`userdata.sh`) and sshd's `RevokedKeys` directive
+consults it on each authentication, so the revocation takes effect without a
+restart. The file is created empty at boot (`root:root 0644`) and is
+**host-plane** state: it is not reachable from the container (the sshd mount
+is `ro`, and there is no passwordless sudo anywhere).
 
 ```sh
-tools/ssh-ca/ssh-ca revoke ~/.ssh/some-key.pub   # appends to /etc/ssh/revoked_keys
+# Host plane (SSM root shell, docs/admin-split.md): append the offending key.
+grep -Fqx '<the public key line>' /etc/gitd/revoked_keys || \
+  echo '<the public key line>' >> /etc/gitd/revoked_keys
 ```
 
-`revoke` needs write access to `/etc/ssh` — the admin user's passwordless sudo
-(reached from the container shell, `docs/admin-split.md`). It is an Ed25519-only
-guard and fail-fast on a duplicate.
+The client-box helper `tools/ssh-ca/ssh-ca revoke <pubkey>` appends to that
+box's **own** `/etc/ssh/revoked_keys` — a local record only; it does NOT reach
+git.cmposer.cc. There is no sync path for SSH revoked keys (only the TLS CRL
+rides `upload-certs.sh`), so the host-plane append above is the actual
+mechanism. It is an Ed25519-only guard and fail-fast on a duplicate.
 
 On the **browse side**, revocation is the TLS CRL: revoke by re-issuing the
 CRL (the CA index database tracks it), push via
@@ -138,7 +146,7 @@ the CRL is the mechanism for a lost device cert.
 | `issue-user [--admin] <pubkey>` | 90d user cert; `--admin` → principals `git,admin` (R2-Q14), else `git`. |
 | `issue-host [OUT_DIR]` | Ed25519 host key + 1y host cert, principal `git.cmposer.cc` only (R10-Q10). |
 | `renew <cert.pub>` | Re-issue with a fresh window, preserving identity + principals. |
-| `revoke <pubkey>` | Append a key to `/etc/ssh/revoked_keys` (needs root/sudo). |
+| `revoke <pubkey>` | Append a key to THIS box's `/etc/ssh/revoked_keys` (local record only — server-side revocation is a host-plane append to `/etc/gitd/revoked_keys`, see above). |
 
 Cert lifetimes and key types are constants in the tool (`lib.sh`) — it refuses
 any non-Ed25519 key or an out-of-window request rather than accepting a

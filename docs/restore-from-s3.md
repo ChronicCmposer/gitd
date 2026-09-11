@@ -4,8 +4,9 @@ Two operational procedures on the repo layer, both **container-only** — the
 admin shell image has no `aws` CLI (R6-Q9), so every operation below runs via
 `gitd` subcommands, never raw S3.
 
-- Restoring a repo from its S3 bundle mirror (`gitd mirror fetch`, R8-Q2/R11-Q5)
-- Deleting a repo outright (manual admin-shell procedure, R5-Q10)
+- Restoring a repo from its S3 bundle mirror (`gitd mirror restore <repo>`,
+  R8-Q2/R11-Q5)
+- Deleting a repo outright (manual admin/host procedure, R5-Q10)
 
 ## 1. Restore a repo from S3
 
@@ -15,12 +16,12 @@ bundle into a fresh bare repo under `/srv/git`.
 
 ### The restore sequence (R11-Q5)
 
-`gitd mirror fetch <repo> [dest]` implements exactly this order — `<dest>` is
-optional and defaults to `/srv/git/<repo>.git`:
+`gitd mirror restore <repo>` implements exactly this order. The destination is
+**always** `/srv/git/<repo>.git` — there is no `<dest>` argument:
 
-1. **Destination must not exist.** `Fetch` fails fast if the destination
+1. **Destination must not exist.** Restore fails fast if `/srv/git/<repo>.git`
    already exists (`mirror fetch: destination ... already exists`). You cannot
-   restore over an existing repo; use a fresh path.
+   restore over an existing repo; no `--force` exists.
 2. **Explicit sha256 init.** A fresh bare repo is created with
    `git init --bare --object-format=sha256 <dest>` — never relies on defaults
    (R10-Q4).
@@ -39,40 +40,39 @@ and the next push re-validates everything via `receive.fsckObjects` (R11-Q5).
 
 ### On the container shell
 
-Get into the gitd container shell over SSH. `gitd mirror list` / `delete` /
-`fetch` are in the **scoped sudoers** (`image/fs/etc/sudoers`, R8-Q1, extended
-for the restore path) and run through the admin user's `sudo -u git`
-elevation:
+Get into the gitd container shell over SSH and run the mirror verbs **directly
+as admin** — there is no `sudo` in the image. `gitd mirror restore` is
+**serve-owned**: the CLI submits it over the serve socket
+(`POST /v1/restore` on `/var/spool/gitd/gitd.sock`) and the `gitd-serve`
+process, which owns `/srv/git`, performs the write:
 
 ```sh
 # Reach the admin fish shell (cert principals git,admin; R2-Q14).
 ssh git@git.cmposer.cc
-# list/delete/fetch are within the scoped NOPASSWD sudoers (R8-Q1/R6-Q9/R11-Q5):
-sudo -u git gitd mirror list my-repo
+# list/delete run directly as admin (S3 through the instance role):
+gitd mirror list my-repo
 # list with no <repo> enumerates every repo that has mirrors (NDJSON):
-sudo -u git gitd mirror list
-# Restore runs as the git user so the repo lands in /srv/git git-owned:
-sudo -u git gitd mirror fetch <repo>
-# With a custom destination:
-sudo -u git gitd mirror fetch <repo> /srv/git/<repo>.git
+gitd mirror list
+# Restore is serve-owned: submit to the serve socket; serve writes /srv/git.
+# Requires gitd-serve to be running; takes no --sha256 and no dest.
+gitd mirror restore <repo>
 ```
 
 > Restore runs entirely in-container via the instance role — there is no
-> `aws` CLI in the image (R6-Q9). The sudoers grant is `gitd mirror fetch *`
-> and `gitd mirror fetch * *` (one wildcard per argument), matching both
-> operand counts. The image rootfs is `--rootfs-ro`, so sudoers is baked at
-> build time — the grant arrives with an image rebuild + in-place update.
+> `aws` CLI in the image (R6-Q9). The `gitd-serve` process performs the
+> restore on behalf of the socket submission, so the restored repo lands
+> git-owned and the admin never needs elevation. The socket is 0770 `git:git`
+> and admin is a `git` group member, so the CLI can connect. If `gitd-serve`
+> is down, restore fails loudly (`socket ... /v1/restore` error).
 
 Notes:
 
-- `fetch` takes `<repo>` (the name, allowlist-validated) and an optional
-  `<dest>` (the path to create). With no `<dest>`, it restores into
-  `/srv/git/<repo>.git` by default so the repo is live and recognizable,
+- `restore` takes exactly `<repo>` (the name, allowlist-validated) and
+  restores into `/srv/git/<repo>.git` — the repo is live and recognizable,
   matching the `/srv/git/<name>.git` layout (R10-Q4).
-- Restore must run as the **git** user: `/srv/git` is `0755 git:git`, so the
-  admin user cannot write it directly — only `git` owns the store. `sudo -u
-  git` elevation is exactly what the scoped sudoers provides, and the restored
-  repo is git-owned so pushes keep working. The bundle temp download lives
+- Restore is serve-owned: `/srv/git` is `0755 git:git`, so the admin user
+  cannot write it directly — only the serve process (root, with
+  `CAP_DAC_OVERRIDE`) owns the store write. The bundle temp download lives
   under `/var/spool/gitd` (existing rw mount, R5-Q4/R8-Q3).
 - `<repo>` is validated against the repo-name allowlist
   `[A-Za-z0-9][A-Za-z0-9._-]{0,99}` (R2-Q1).
@@ -81,9 +81,9 @@ Notes:
 
 ```sh
 # Lists the bundle(s) — NDJSON {repo, bundles:[...]} (R13-Q6).
-sudo -u git gitd mirror list my-repo
+gitd mirror list my-repo
 # `mirror list` with no <repo> lists every repo that has mirrors.
-sudo -u git gitd mirror list
+gitd mirror list
 # The restored repo should push/pull like a normally-created one.
 ssh git@git.cmposer.cc        # greeting
 git clone git@git.cmposer.cc:my-repo.git /tmp/my-repo-clone
@@ -94,9 +94,9 @@ git clone git@git.cmposer.cc:my-repo.git /tmp/my-repo-clone
 The bundle key embeds a nanosecond RFC3339 timestamp
 (`repos/<repo>/<RFC3339 with '-' for ':'>.bundle`, R11-Q3) that is generated
 **inside the serialized actions-channel action at execution time** (R10-Q3), so
-the last-executed bundle is always the newest repo state. `Fetch` sorts keys
+the last-executed bundle is always the newest repo state. Restore sorts keys
 ascending and takes the last one. S3 object versioning keeps older writes, but
-`mirror list`/`fetch` operate on the current keys under the `repos/<prefix>/`
+`mirror list`/`restore` operate on the current keys under the `repos/<prefix>/`
 namespace.
 
 ### Eventual-mirror caveat (R13-Q2)
@@ -117,30 +117,33 @@ backstop — you do not need to run it by hand. To confirm it is healthy,
 `journalctl -u gitd-serve` (host plane) should show `bundle verified` lines
 for each repo with bundles on the configured cadence.
 
-If you want an on-demand spot check, fetch is itself a verify+restore, so a
+If you want an on-demand spot check, restore is itself a verify+restore, so a
 restore into a scratch dir is a manual verification path — but the weekly loop
 is the intended mechanism.
 
-## 3. Deleting a repository (manual, container-only)
+## 3. Deleting a repository (manual, split-plane)
 
 Repo deletion is deliberately **not** a `gitd` subcommand in v1 (R5-Q10). It is
-a manual two-part admin-shell procedure. The purpose is to make deletion a
-conscious, audited action rather than an API footgun.
+a manual two-part procedure. The purpose is to make deletion a conscious,
+audited action rather than an API footgun. The live repo lives on host storage
+(`/srv/git` is `0755 git:git`, so not even a `git` group member can write it
+from the container) while the bundles live in S3 — so the two halves split
+across planes:
 
 Steps, in order:
 
-1. Remove the local repo from the EBS store:
+1. Remove the local repo from the EBS store — **host plane** (SSM root shell,
+   where `/srv/git` is writable):
    ```sh
-   ssh git@git.cmposer.cc                        # admin shell
+   # SSM Session Manager root shell (docs/admin-split.md)
    rm -rf /srv/git/<repo>.git                     # remove the live repo
    ```
-   (`/srv/git` is `0755 git:git` — the admin user cannot write it directly;
-   the `rw` bind mount, R5-Q4, does not change that. The gitd verbs in this
-   procedure run as `git` via the scoped sudoers, R8-Q1.)
 
-2. Remove the current bundle(s) from the S3 mirror:
+2. Remove the current bundle(s) from the S3 mirror — **data plane**, directly
+   as admin (S3 through the instance role; no sudo exists in the image):
    ```sh
-   sudo -u git gitd mirror delete <repo>          # deletes every current bundle
+   ssh git@git.cmposer.cc                        # admin shell
+   gitd mirror delete <repo>                      # deletes every current bundle
    ```
    `gitd mirror delete <repo>` lists the keys then deletes each via the
    objectstore `Store.Delete` seam (R6-Q9). Deleting a repo with **zero refs** /
@@ -148,7 +151,7 @@ Steps, in order:
 
 3. Confirm:
    ```sh
-   sudo -u git gitd mirror list <repo>            # → {repo, bundles:[]}
+   gitd mirror list <repo>                        # → {repo, bundles:[]}
    ```
 
 **Noncurrent versions expire naturally.** The bucket has a 30-day
@@ -171,5 +174,5 @@ keys.
 
 The container talks to S3 only through the instance role, which grants
 `Put/List/Get/Delete` on `s3://<bucket>/repos/*` (R6-Q9). `mirror delete` and
-`mirror fetch` both run entirely in-container via that role — no `aws` CLI,
+`mirror restore` both run entirely in-container via that role — no `aws` CLI,
 no extra creds (R7-Q3).

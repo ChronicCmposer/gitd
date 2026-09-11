@@ -47,7 +47,9 @@ commands:
       its principals and identity (same CA).
 
   revoke <pubkey>
-      Append the Ed25519 public key <pubkey> to /etc/ssh/revoked_keys (R2-Q4).
+      Append the Ed25519 public key <pubkey> to this box's /etc/ssh/revoked_keys
+      (local record only; server-side revocation is a host-plane append to
+      /etc/gitd/revoked_keys, see docs/cert-renewal.md).
 
 exit codes: 0 ok / 1 runtime error / 2 usage error
 EOF
@@ -261,8 +263,11 @@ cmd_renew() {
 
 # --- revoke -------------------------------------------------------------------
 
-# cmd_revoke appends an Ed25519 public key to /etc/ssh/revoked_keys (R2-Q4),
-# which the server's RevokedKeys directive then refuses to authenticate.
+# cmd_revoke appends an Ed25519 public key to THIS box's /etc/ssh/revoked_keys
+# (R2-Q4). It is a local record only: it does not reach git.cmposer.cc — the
+# server-side revocation mechanism is a host-plane append to
+# /etc/gitd/revoked_keys (the sshd container mounts it ro as
+# /etc/ssh/revoked_keys; see docs/cert-renewal.md).
 cmd_revoke() {
     [[ $# -eq 1 ]] || usage
     local pub="$1"

@@ -14,7 +14,7 @@ internal). Module path `github.com/ChronicCmposer/gitd`, Go 1.26.x, Bazel
 | Surface | What | Gate |
 |---------|------|------|
 | `:22` SSH gateway | custom static **OpenSSH** with **hybrid-PQC kex** (`mlkem768x25519`/`sntrup761x25519`), SSH-CA mutual auth, GitHub-style greeting, push-to-create | SSH host + user certs (local CA) |
-| S3 mirror | every push bundles `--all` → versioned `s3://git.cmposer.cc/repos/<repo>/<ts>.bundle`; weekly verify; restore via `gitd mirror fetch` | instance role |
+| S3 mirror | every push bundles `--all` → versioned `s3://git.cmposer.cc/repos/<repo>/<ts>.bundle`; weekly verify; restore via `gitd mirror restore <repo>` | instance role |
 | `:443` browse | mTLS read-only UI (server/client/none render toggle, security headers, empty-repo pages) | client cert from the TLS CA |
 | webhooks | compiled-in Go plugins (`http`, `logger`) + durable JSON spool, HMAC-SHA256, dead-letter + replay | plugin `type:` + HMAC secret |
 
@@ -169,7 +169,7 @@ go run ./cmd/gitd spool replay <id>                    # re-deliver one event
 go run ./cmd/gitd spool purge                          # remove delivered+expired events
 go run ./cmd/gitd mirror list <repo>                   # list S3 bundles
 go run ./cmd/gitd mirror delete <repo>                 # delete a repo's bundles
-go run ./cmd/gitd mirror fetch <repo> [dest]            # restore from the latest bundle (dest defaults to /srv/git/<repo>.git)
+go run ./cmd/gitd mirror restore <repo>           # restore from the latest bundle into /srv/git/<repo>.git (serve socket)
 go run ./cmd/gitd ddns --config ...                    # Namecheap dynamic DNS refresh
 ```
 
@@ -181,7 +181,7 @@ Exit codes: `0` ok, `1` runtime, `2` usage; errors to stderr as
 | Runbook | Covers |
 |---------|--------|
 | [deploy](docs/deploy.md) | prerequisites, `deploy.sh`, artifact sha256 pin + GPG provenance flow, boot/rollback, SSM access, post-boot verification |
-| [restore-from-s3](docs/restore-from-s3.md) | `gitd mirror fetch <repo> [dest]` restore (dest defaults to `/srv/git/<repo>.git`), weekly bundle verify, repo deletion |
+| [restore-from-s3](docs/restore-from-s3.md) | `gitd mirror restore <repo>` (serve-owned, `/srv/git/<repo>.git`), weekly bundle verify, repo deletion |
 | [cert-renewal](docs/cert-renewal.md) | TLS + SSH renewal (client timer → SSM → cert-sync; host-cert via update.sh) |
 | [plugin-authoring](docs/plugin-authoring.md) | webhook `Plugin` interface, registry, http/logger, HMAC, config schema, delivery semantics |
 | [openssh-upgrade](docs/openssh-upgrade.md) | bump pin, auth-identity patch, rebuild, determinism, republish (GPG-signed), in-place update |

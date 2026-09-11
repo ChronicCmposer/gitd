@@ -111,7 +111,7 @@ CloudFormation stays for two cases only (R3-Q10):
 - **Emergency rebuild.** Instance loss / unrecoverable host corruption: re-run
   `deploy.sh`, which pushes the *current* bundle, pins, and SSM certs, then
   `create-stack` rebuilds the instance (EBS is then re-provisioned; the data
-  live-store returns via a `gitd mirror fetch` restore from S3,
+  live-store returns via a `gitd mirror restore <repo>` from S3,
   `docs/restore-from-s3.md` — S3 is the canonical copy). Certs come from SSM
   `/gitd/*`, so the rebuild inherits current host/TLS identity.
 

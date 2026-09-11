@@ -19,48 +19,51 @@ ops, SSM `StartSession` is for host-plane maintenance.
 
 All git **data-lifecycle** operations belong here, and every one of them works
 through `gitd` subcommands — the container image has **no** `aws` CLI, so raw
-S3 is not an option in-container (R6-Q9). Admin elevation in the container is
-a static musl `sudo` with a **scoped sudoers** baked into the image at build
-time (R8-Q1): passwordless `sudo -u git` is allowed for exactly the gitd
-data-plane verbs and nothing else.
+S3 is not an option in-container (R6-Q9). The image has **no `sudo` and no
+elevation path**: admin is a member of the `git` group (gid 1001), which
+grants read/write on the setgid `/var/spool/gitd` and connect access to the
+0770 `git:git` control socket — but never root. The only operation that must
+write `/srv/git`, `gitd mirror restore`, is **serve-owned**: the CLI submits
+it over the control socket and the `gitd-serve` process (which owns the repo
+store) performs the write.
 
 ```sh
 # Admin cert (principals git,admin) over the dedicated ~/.ssh/gitd_ed25519 key.
 ssh git@git.cmposer.cc
-# Now inside the fish shell, you can sudo -u git over the scoped-verb list:
-sudo -u git gitd spool list
+# Now inside the fish shell, run the data-plane verbs directly (no sudo):
+gitd mirror list
 ```
 
-### Allowed `sudo -u git` verbs (R8-Q1)
+### Data-plane verbs
 
-| Verb | Purpose |
-|------|---------|
-| `gitd spool list` | NDJSON dump of every spooled webhook event (R13-Q6) |
-| `gitd spool replay <id>` | Re-deliver one event synchronously via `/v1/deliver` (R7-Q8, R12-Q2) |
-| `gitd spool purge` | Remove delivered events past the retention TTL (R6-Q1, R11-Q4) |
-| `gitd mirror list [<repo>]` | List a repo's S3 bundles, or with no `<repo>` every repo that has mirrors — `{repo, bundles:[...]}`, one NDJSON object per repo (R13-Q6) |
-| `gitd mirror delete <repo>` | Delete a repo's current bundles (R6-Q9) |
-| `gitd mirror fetch <repo> [dest]` | Restore `<repo>` from its latest bundle into `<dest>` (default `/srv/git/<repo>.git`); runs as git so the restored repo lands git-owned (R8-Q2, R11-Q5) |
+| Verb | Runs as | Purpose |
+|------|---------|---------|
+| `gitd spool list` | admin, direct | NDJSON dump of every spooled webhook event (R13-Q6) |
+| `gitd spool replay <id>` | admin command, serve socket | Re-deliver one event synchronously via `/v1/deliver` (R7-Q8, R12-Q2) |
+| `gitd spool purge` | admin, direct | Remove delivered events past the retention TTL (R6-Q1, R11-Q4) |
+| `gitd mirror list [<repo>]` | admin, direct | List a repo's S3 bundles, or with no `<repo>` every repo that has mirrors — `{repo, bundles:[...]}`, one NDJSON object per repo (R13-Q6) |
+| `gitd mirror delete <repo>` | admin, direct | Delete a repo's current bundles from S3 (R6-Q9) |
+| `gitd mirror restore <repo>` | serve (socket) | Restore `<repo>` from its latest bundle into `/srv/git/<repo>.git`; serve owns `/srv/git`, so the repo lands git-owned without admin elevation (R8-Q2, R11-Q5) |
 
-> **`gitd mirror fetch <repo> [dest]` is in the scoped sudoers.** The baked
-> sudoers (`image/fs/etc/sudoers`, R8-Q1) grants it as `gitd mirror fetch *`
-> and `gitd mirror fetch * *` (one wildcard per argument, matching both
-> operand counts) alongside the spool verbs and `mirror list`/`delete`. The
-> image rootfs is `--rootfs-ro`, so sudoers is baked at build time — the
-> grant arrives with an image rebuild + in-place update
-> (`docs/restore-from-s3.md`).
+> **`gitd mirror restore <repo>` is a serve socket operation.** The CLI
+> submits `POST /v1/restore` over `/var/spool/gitd/gitd.sock` and the
+> `gitd-serve` process (which owns `/srv/git`) performs the restore — the
+> same socket discipline as `gitd spool replay`. It requires `gitd-serve` to
+> be running, takes exactly `<repo>` (no dest, no `--sha256`), and always
+> restores into `/srv/git/<repo>.git`; the destination must not already exist
+> (fail-fast, no `--force`).
 
 ### Plain operations in the shell (no sudo)
 
-- `rm -rf /srv/git/<repo>.git` — hard repo deletion. The admin user **cannot**
-  write `/srv/git` directly: it is `0755 git:git` (R5-Q4), and the container
-  `rw` bind mount does not make it admin-writable — only the `git` user owns
-  the store. Repo deletion/restore therefore run as the git user via the
-  scoped sudoers; always pair the removal with
-  `sudo -u git gitd mirror delete <repo>`; see `docs/restore-from-s3.md`.
-- The spool directory `/var/spool/gitd` is 0700 `git:git` and event files are
-  0600 `git:git` (R4-Q11), so spool file inspection also goes through the
-  `sudo -u git gitd spool ...` verbs rather than naked file reads.
+- `gitd mirror list`/`delete` and `gitd spool list`/`purge` need nothing but
+  the admin user's own permissions: S3 goes through the instance role, and
+  `/var/spool/gitd` is setgid `git` (2770) so admin (a `git` group member)
+  reads the spool and connects to the control socket.
+- Hard repo deletion of the live `/srv/git/<repo>.git` is a **host-plane**
+  operation: `/srv/git` is `0755 git:git` (R5-Q4), so not even a `git` group
+  member can write it from the container. Remove the live repo from the SSM
+  host shell, then delete the S3 bundles with `gitd mirror delete <repo>`
+  from the data plane; see `docs/restore-from-s3.md`.
 
 ### `gitd` subcommand reference (Phase 3-8, `internal/cli`)
 
@@ -69,12 +72,12 @@ sudo -u git gitd spool list
 
 | Verb | Role |
 |------|------|
-| `serve` | The gateway ForceCommand **and** the daemon. With `SSH_CONNECTION` set it runs the sshcmd gateway (greeting, `git-upload-pack`/`git-receive-pack`); as the `gitd-serve` unit it runs the actions-channel server (socket `/v1/bundle` + `/v1/deliver`, spool sweep, weekly verify, startup catch-up) and the `:443` mTLS browse server (R10-Q1, R12-Q5). |
+| `serve` | The gateway ForceCommand **and** the daemon. With `SSH_CONNECTION` set it runs the sshcmd gateway (greeting, `git-upload-pack`/`git-receive-pack`); as the `gitd-serve` unit it runs the actions-channel server (socket `/v1/bundle` + `/v1/deliver` + `/v1/restore`, spool sweep, weekly verify, startup catch-up) and the `:443` mTLS browse server (R10-Q1, R12-Q5). |
 | `notify` | Post-receive hook: writes one spool event per ref line (R11-Q1), submits the bundle upload to serve over the socket, and runs sync-mode deliveries. |
 | `pre-receive` | Pre-receive hook: strict stdin parse, statfs disk headroom, fail-closed policy engine (R9-Q7, R7-Q4, R5-Q1). |
-| `spool` | `list` / `replay <id>` / `purge` of the webhook spool. |
+| `spool` | `list` / `replay <id>` / `purge` of the webhook spool; `replay` routes over the serve socket. |
 | `ddns` | Refresh the Namecheap dynamic DNS record (6h timer; reads `ddns.password_file`, root). |
-| `mirror` | `list [<repo>]` / `delete <repo>` / `fetch <repo> [dest]` — `list` with no `<repo>` enumerates every mirrored repo (one NDJSON object per repo, R13-Q6); `fetch` dest defaults to `/srv/git/<repo>.git`. |
+| `mirror` | `list [<repo>]` / `delete <repo>` / `restore <repo>` — `list` with no `<repo>` enumerates every mirrored repo (one NDJSON object per repo, R13-Q6); `restore` is serve-owned, socket-routed, and always targets `/srv/git/<repo>.git`. |
 | `version` | Print the link-time version string. |
 
 ## 2. Host plane: SSM Session Manager
@@ -128,9 +131,9 @@ shell; anything timed/systemd/host-OS → SSM.** Concretely:
 
 | Task | Plane |
 |------|-------|
-| Reply to a dead-lettered webhook | SSH → `sudo -u git gitd spool replay <id>` |
-| Repo restore from S3 | SSH → `sudo -u git gitd mirror fetch ...` |
-| Delete a repo | SSH → `rm -rf` + `sudo -u git gitd mirror delete` |
+| Reply to a dead-lettered webhook | SSH → `gitd spool replay <id>` |
+| Repo restore from S3 | SSH → `gitd mirror restore <repo>` (serve socket, requires gitd-serve) |
+| Delete a repo | SSM → `rm -rf /srv/git/<repo>.git`, then SSH → `gitd mirror delete <repo>` |
 | Inspect push/delivery audit logs | SSM → `journalctl -u gitd-serve` |
 | Restart a container unit after a crash | SSM → `systemctl restart gitd-sshd` |
 | In-place image update | SSM → fetch/verify/`ctr image import`/restart (`docs/update.md`) |
