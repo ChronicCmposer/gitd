@@ -30,6 +30,19 @@
 # allows for the host plane (R2-Q16); the container SSH shell has no
 # ctr/systemctl.
 #
+# Verification: the local `aws ssm start-session` exit code is ALWAYS 0
+# regardless of the remote command's outcome (AWS "by design"), so it is never
+# trusted. The session output is captured (tee -> a temp file, the operator
+# still sees it live) and the document is invoked with separateOutputStream=true
+# so it emits an EXIT_CODE: N line. Success is reported ONLY after the in-band
+# success sentinel "GITD_UPDATE_OK" (printed by the remote body after every
+# `set -euo pipefail` step — GPG verify, sha256 verify, import, restarts —
+# succeeds) and/or "EXIT_CODE: 0" appears in the captured output; a failed roll
+# is reported loudly, never as success. start-session requires the local
+# session-manager-plugin and a TTY; in a non-TTY context the session is wrapped
+# in `unbuffer` (expect) to avoid "Cannot perform start session: EOF" (unbuffer
+# is an optional mitigation). As before, this does NOT build or sign.
+#
 # Usage:
 #   cloudformation/update.sh --sha256 <hex> [opts]
 #   GITD_IMAGE_SHA256=<hex> cloudformation/update.sh [opts]
@@ -129,6 +142,13 @@ restart gitd units. It does NOT build or sign.
 The sha256 pin must be supplied out-of-band (never fetched from the artifact
 channel). If gitd-container.tar(.asc) is absent, run `make release` first.
 
+The session output is captured and the roll is VERIFIED (in-band success
+sentinel "GITD_UPDATE_OK" and/or "EXIT_CODE: 0" from separateOutputStream=true)
+before success is reported — the local start-session exit code is always 0 and
+is never trusted. start-session needs the session-manager-plugin and a TTY;
+non-TTY runs are wrapped in unbuffer (expect) to avoid a start-session EOF.
+Still does NOT build or sign.
+
 Options:
   --sha256 <hex>          pinned sha256 of the new gitd-container.tar
   --image-tar <path>      prebuilt, signed gitd-container.tar (default: tools/dist/out/gitd-container.tar)
@@ -156,6 +176,9 @@ require_cmd aws
 require_cmd curl
 require_cmd sha256sum
 require_cmd base64
+# start-session needs the local session-manager-plugin (Session Manager client),
+# or the call fails before the plugin can even open the tunnel — fail fast.
+require_cmd session-manager-plugin
 # Publish to GitHub needs gh installed AND authenticated — fail fast, never
 # silently skip a publish (code-philosophy).
 require_gh_auth
@@ -219,6 +242,10 @@ SIGNING_PUBKEY="$(cat "${SIGNING_KEY}")"
 build_remote_body() {
     cat <<REMOTE_EOF
 set -euo pipefail
+# Host-plane elevation (R2-Q16): the SSM agent may run this body as ssm-user, in
+# which case every privileged step below (dnf, /opt, systemctl) fails silently.
+# Fail LOUDLY up front instead of reporting a false success.
+[[ "\${EUID}" -eq 0 ]] || { echo "gitd: update: host plane must run as root (current EUID=\${EUID}); aborting" >&2; exit 1; }
 EXPECTED_SHA='${SHA256}'
 REGION='${REGION}'
 GITHUB_IMAGE_URL='https://github.com/${DIST_REPO}/releases/download/${GITD_RELEASE_TAG}/gitd-container.tar'
@@ -288,17 +315,68 @@ systemctl restart gitd-serve.service   # first: gitd-sshd After=gitd-serve (R12-
 systemctl restart gitd-sshd.service
 systemctl restart gitd-ddns.service
 echo "gitd: update: units restarted (gitd-serve, gitd-sshd, gitd-ddns); EBS + spool untouched"
+# Success sentinel: printed ONLY after the whole set -euo pipefail body above
+# (GPG verify, sha256 verify, ctr import, unit restarts) has run. The operator
+# greps this token (plus EXIT_CODE: 0) to confirm the roll really succeeded.
+echo "GITD_UPDATE_OK"
 REMOTE_EOF
 }
 
 REMOTE_B64="$(build_remote_body | base64 -w0)"
 REMOTE_CMD="printf '%s' '${REMOTE_B64}' | base64 -d | bash"
 
-echo "gitd: update: running in-place update on ${INSTANCE_ID} over SSM"
-aws ssm start-session \
+# --- run the roll over SSM and VERIFY the remote result --------------------------
+# `aws ssm start-session` ALWAYS exits 0 regardless of the remote command's
+# outcome (AWS "by design"), so its exit code is never trusted. Instead: (1) the
+# session output is captured via tee to a temp file (the operator still sees it
+# live), (2) the document is invoked with separateOutputStream=true so it emits
+# an EXIT_CODE: N line, and (3) success is reported ONLY once the in-band
+# success sentinel GITD_UPDATE_OK and/or "EXIT_CODE: 0" appear in the captured
+# output. A failed roll is reported loudly, never as success.
+SESSION_LOG="$(mktemp)"
+trap 'rm -f "${SESSION_LOG}"' EXIT
+
+# The base64-envelope command (single `command` value) contains no commas, so
+# the comma-separated `command=<cmd>,separateOutputStream=true` parameter form
+# is safe. separateOutputStream=true makes the document emit the EXIT_CODE: N
+# line that we also check below.
+PARAMS="{\"command\":[\"${REMOTE_CMD}\"],\"separateOutputStream\":[\"true\"]}"
+START_SESSION=(aws ssm start-session \
     --region "${REGION}" \
     --target "${INSTANCE_ID}" \
     --document-name AWS-StartNonInteractiveCommand \
-    --parameters "{\"command\":[\"${REMOTE_CMD}\"]}" >/dev/null
+    --parameters "${PARAMS}")
 
-echo "gitd: update: done (new image ${SHA256} live on ${INSTANCE_ID})"
+# start-session is TTY-dependent: in a scripted (non-TTY) context it can die
+# with "Cannot perform start session: EOF". When stdout is not a TTY we wrap the
+# session in `unbuffer` (expect) as a mitigation. unbuffer is OPTIONAL (a soft
+# requirement, not a hard require_cmd): if it is absent we still run and the
+# sentinel check below catches a botched session.
+echo "gitd: update: running in-place update on ${INSTANCE_ID} over SSM (output captured for verification)"
+# The start-session local exit code is meaningless (always 0), so suppress
+# errexit around the session and judge the outcome from the captured output.
+set +e
+if [[ ! -t 1 ]] && command -v unbuffer >/dev/null 2>&1; then
+    echo "gitd: update: stdout is not a TTY; wrapping session in unbuffer (expect) to avoid 'start session: EOF'"
+    unbuffer "${START_SESSION[@]}" 2>&1 | tee "${SESSION_LOG}"
+else
+    "${START_SESSION[@]}" 2>&1 | tee "${SESSION_LOG}"
+fi
+SESSION_STATUS="${PIPESTATUS[0]}"
+set -e
+# shellcheck disable=SC2181
+if [[ "${SESSION_STATUS}" -ne 0 ]]; then
+    echo "gitd: update: warning: aws ssm start-session exited ${SESSION_STATUS}; remote result is judged from captured output" >&2
+fi
+
+echo "gitd: update: session finished; verifying remote result from captured output"
+# Authoritative signal: the in-band sentinel only prints after the WHOLE remote
+# `set -euo pipefail` body (GPG verify, sha256 verify, import, restarts) ran.
+# "EXIT_CODE: 0" (from separateOutputStream=true) is secondary corroboration.
+if grep -q "GITD_UPDATE_OK" "${SESSION_LOG}" || grep -q "EXIT_CODE: 0" "${SESSION_LOG}"; then
+    echo "gitd: update: verified: new image ${SHA256} rolled onto ${INSTANCE_ID}"
+else
+    echo "gitd: update: remote update did NOT report success; captured output:" >&2
+    cat "${SESSION_LOG}" >&2
+    die "remote roll of new image ${SHA256} onto ${INSTANCE_ID} failed (no success sentinel / EXIT_CODE: 0 in session output)"
+fi
