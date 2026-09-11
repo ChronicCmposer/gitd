@@ -4,6 +4,7 @@ go_library(
     name = "mirror",
     srcs = [
         "agent.go",
+        "bundleformat.go",
         "mirror.go",
     ],
     importpath = "github.com/ChronicCmposer/gitd/internal/mirror",
@@ -20,6 +21,7 @@ go_test(
     name = "mirror_test",
     srcs = [
         "agent_test.go",
+        "bundleformat_test.go",
         "mirror_extra_test.go",
         "mirror_test.go",
     ],

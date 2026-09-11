@@ -111,7 +111,7 @@ func testRestoreAgent(t *testing.T, srv *Serve, store *objectstore.MemoryStore) 
 	return cancel
 }
 
-// makeBareRepo creates a bare sha256 repo with one commit at reposRoot/name.git.
+// makeBareRepo creates a bare sha1 repo with one commit at reposRoot/name.git.
 func makeBareRepo(t *testing.T, reposRoot, name string) {
 	t.Helper()
 	root := t.TempDir()
@@ -127,7 +127,7 @@ func makeBareRepo(t *testing.T, reposRoot, name string) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run(work, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(work, "init", "-q", "-b", "main", "--object-format=sha1", ".")
 	run(work, "config", "user.email", "t@t")
 	run(work, "config", "user.name", "T")
 	if err := os.WriteFile(filepath.Join(work, "a"), []byte("a\n"), 0o644); err != nil {

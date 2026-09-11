@@ -85,17 +85,18 @@ func TestFetchNoBundlesFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no bundles") {
 		t.Fatalf("Fetch(no bundles) = %v, want no-bundles error", err)
 	}
-	// Fetch created dest (git init) before failing on the missing bundle;
-	// partial-failure cleanup must have removed it (no half-initialized repo).
+	// The no-bundles failure happens BEFORE git init (the bundle is listed
+	// first), so dest is never created.
 	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
-		t.Errorf("dest %s still exists after no-bundles failure (stat err = %v)", dest, statErr)
+		t.Errorf("dest %s exists after no-bundles failure (stat err = %v)", dest, statErr)
 	}
 }
 
 func TestFetchPartialFailureRemovesCreatedDest(t *testing.T) {
-	// A corrupt bundle makes bundle verify fail AFTER git init created dest;
-	// the partial-failure cleanup must remove dest so a failed restore never
-	// leaves a half-initialized repo behind.
+	// A bundle with a valid header but a corrupt pack makes bundle verify fail
+	// AFTER git init created dest (the header parse decided the format, init
+	// ran, verify failed); the partial-failure cleanup must remove dest so a
+	// failed restore never leaves a half-initialized repo behind.
 	store := objectstore.NewMemoryStore()
 	m, _ := testMirror(t, store)
 	bare := makeRepo(t)
@@ -109,7 +110,9 @@ func TestFetchPartialFailureRemovesCreatedDest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Put(context.Background(), keys[0], []byte("not a bundle")); err != nil {
+	// Keep the valid "# v2 git bundle" header (so init runs) but corrupt the
+	// pack so git bundle verify fails.
+	if err := store.Put(context.Background(), keys[0], []byte("# v2 git bundle\n\nPACKGARBAGE")); err != nil {
 		t.Fatal(err)
 	}
 	dest := filepath.Join(t.TempDir(), "restored.git")

@@ -42,7 +42,7 @@ func runMirrorAgent(args []string, _, _ io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("mirror-agent: storage: %w", err)
 	}
-	git := gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH"))
+	git := gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH")).WithObjectFormat(gitd.ObjectFormat)
 	m := mirror.New(store, git, reposRoot, gitd.Storage.Prefix, spoolDir, time.Now, log)
 	agent := mirror.NewAgent(mirror.AgentConfig{
 		Mirror:    m,

@@ -33,7 +33,7 @@ func makeRepo(t *testing.T) (string, string, string) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run(work, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(work, "init", "-q", "-b", "main", "--object-format=sha1", ".")
 	run(work, "config", "user.email", "t@t")
 	run(work, "config", "user.name", "T")
 	if err := os.WriteFile(filepath.Join(work, "a"), []byte("a\n"), 0o644); err != nil {

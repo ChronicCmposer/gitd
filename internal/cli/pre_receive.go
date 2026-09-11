@@ -43,7 +43,7 @@ func runPreReceive(args []string, _, _ io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("pre-receive: getwd: %w", err)
 	}
-	git := gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH"))
+	git := gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH")).WithObjectFormat(gitd.ObjectFormat)
 	engine := webhook.NewPolicyEngine(webhook.DefaultPolicies, webhook.PolicyDeps{Git: git, RepoDir: cwd})
 	if err := engine.Build(gitd.Policies); err != nil {
 		return err

@@ -22,7 +22,9 @@ func fakeBin(t *testing.T, script string) string {
 
 // printEnvScript emits every pinned var (R9-Q4) plus argv, one per line, then
 // exits with $1 when set. Used to assert the exact environment construction.
-const printEnvScript = `for v in LC_ALL TZ GIT_CONFIG_GLOBAL GIT_TERMINAL_PROMPT HOME PATH; do eval echo "$v=\$$v"; done; echo "args: $*"; [ -n "${EXIT_CODE:-}" ] && exit "$EXIT_CODE"; exit 0`
+// GIT_DEFAULT_HASH is printed only when set, so its omission (no configured
+// object format) is observable.
+const printEnvScript = `for v in LC_ALL TZ GIT_CONFIG_GLOBAL GIT_TERMINAL_PROMPT HOME PATH; do eval echo "$v=\$$v"; done; [ -n "${GIT_DEFAULT_HASH:-}" ] && echo "GIT_DEFAULT_HASH=$GIT_DEFAULT_HASH"; echo "args: $*"; [ -n "${EXIT_CODE:-}" ] && exit "$EXIT_CODE"; exit 0`
 
 func TestNewRunnerDefaultsPath(t *testing.T) {
 	r := NewRunner("/usr/bin/git", "/tmp/home", "")
@@ -55,6 +57,56 @@ func TestEnvPinned(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("env output missing %q; got:\n%s", want, got)
+		}
+	}
+	// No object format configured: GIT_DEFAULT_HASH must be omitted entirely
+	// (git's built-in sha1 default applies).
+	if strings.Contains(got, "GIT_DEFAULT_HASH=") {
+		t.Errorf("GIT_DEFAULT_HASH leaked without WithObjectFormat; got:\n%s", got)
+	}
+}
+
+func TestEnvPinsObjectFormat(t *testing.T) {
+	bin := fakeBin(t, printEnvScript)
+	r := NewRunner(bin, "/writable/home", "/image/bin:/usr/bin").WithObjectFormat("sha1")
+
+	out, err := r.Run(context.Background(), "rev-parse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "GIT_DEFAULT_HASH=sha1") {
+		t.Errorf("env missing GIT_DEFAULT_HASH=sha1; got:\n%s", out)
+	}
+
+	r256 := NewRunner(bin, "/writable/home", "/image/bin:/usr/bin").WithObjectFormat("sha256")
+	out, err = r256.Run(context.Background(), "rev-parse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "GIT_DEFAULT_HASH=sha256") {
+		t.Errorf("env missing GIT_DEFAULT_HASH=sha256; got:\n%s", out)
+	}
+}
+
+func TestWithObjectFormatCopiesAndIgnoresInvalid(t *testing.T) {
+	r := NewRunner("/usr/bin/git", "/home", "/usr/bin")
+	cp := r.WithObjectFormat("sha256")
+	if r.objectFormat != "" {
+		t.Errorf("receiver mutated: objectFormat = %q, want empty", r.objectFormat)
+	}
+	if cp.objectFormat != "sha256" {
+		t.Errorf("copy objectFormat = %q, want sha256", cp.objectFormat)
+	}
+	if cp.gitBin != r.gitBin || cp.home != r.home || cp.path != r.path {
+		t.Errorf("copy did not preserve fields: %+v vs %+v", cp, r)
+	}
+
+	// Invalid or empty formats are ignored: the copy keeps the receiver's
+	// (empty) object format, never an invalid one.
+	for _, bad := range []string{"sha512", "md5", ""} {
+		cp := r.WithObjectFormat(bad)
+		if cp.objectFormat != "" {
+			t.Errorf("WithObjectFormat(%q) set objectFormat = %q, want empty", bad, cp.objectFormat)
 		}
 	}
 }

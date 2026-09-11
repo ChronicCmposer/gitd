@@ -123,7 +123,10 @@ func pushToCreate(cfg GatewayConfig, name, repoDir string) error {
 	err := os.Mkdir(repoDir, 0o755)
 	switch {
 	case err == nil:
-		if _, err := cfg.Git.Run(context.Background(), "init", "--bare", "--object-format=sha256", repoDir); err != nil {
+		// The object format of new repos comes from GIT_DEFAULT_HASH (pinned
+		// from config.object_format on the Runner; sha1 default), not a
+		// hardcoded flag, so the operator can flip it via config.
+		if _, err := cfg.Git.Run(context.Background(), "init", "--bare", repoDir); err != nil {
 			return fmt.Errorf("push-to-create %s: init: %w", name, err)
 		}
 		if err := writeDescription(repoDir, name); err != nil {

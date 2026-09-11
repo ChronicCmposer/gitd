@@ -2,8 +2,11 @@
  * committed color, monospace identity, atmospheric depth, controlled density).
  * Palette: bg0 #282828, bg1 #3c3836, fg #ebdbb2, red #fb4934, green #b8bb26,
  * yellow #fabd2f, blue #83a598, purple #d3869b, aqua #8ec07c, orange #fe8019.
+ * App canvas: --bg-app #000000 (pure-black page background; the Gruvbox
+ * surfaces below stay on bg0 so the theme is preserved).
  */
 :root {
+  --bg-app: #000000; /* pure-black app canvas; Gruvbox surfaces stay on --bg0 */
   --bg0: #282828;
   --bg1: #3c3836;
   --bg2: #504945;
@@ -35,7 +38,7 @@ body {
   background:
     radial-gradient(1200px 600px at 15% -10%, rgba(131,165,152,0.08), transparent 60%),
     radial-gradient(900px 500px at 110% 0%, rgba(254,128,25,0.06), transparent 55%),
-    var(--bg0);
+    var(--bg-app);
   color: var(--fg1);
   font-family: var(--font-mono);
   font-size: 14px;

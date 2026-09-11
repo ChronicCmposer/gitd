@@ -374,15 +374,22 @@ func (m *Mirror) LatestBundle(ctx context.Context, repoName string) ([]byte, err
 // fresh bare-repo context — the same "applies cleanly" check Fetch uses. It
 // is shared by serve (fail-fast staging verification) and the mirror-agent
 // (defense-in-depth re-verification of the staged bundle). The scratch repo
-// lives under workDir and is removed before returning.
+// is initialized in the bundle's own object format (detected from the bundle
+// header; fail closed on an unrecognized header), so both SHA-1 and SHA-256
+// bundles verify correctly. The scratch repo lives under workDir and is
+// removed before returning.
 func (m *Mirror) VerifyBundleFile(ctx context.Context, path string) error {
+	format, err := bundleObjectFormat(path)
+	if err != nil {
+		return fmt.Errorf("mirror verify-bundle: %w", err)
+	}
 	scratch, err := os.MkdirTemp(m.workDir, "verify-*")
 	if err != nil {
 		return fmt.Errorf("mirror verify-bundle: scratch: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
 	repoDir := filepath.Join(scratch, "repo.git")
-	if _, err := m.git.Run(ctx, "init", "--bare", "--object-format=sha256", repoDir); err != nil {
+	if _, err := m.git.Run(ctx, "init", "--bare", "--object-format="+format, repoDir); err != nil {
 		return fmt.Errorf("mirror verify-bundle: init: %w", err)
 	}
 	if _, err := m.git.RunIn(ctx, repoDir, "bundle", "verify", path); err != nil {

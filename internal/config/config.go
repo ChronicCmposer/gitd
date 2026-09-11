@@ -77,6 +77,7 @@ type GitdConfig struct {
 	Storage          StorageConfig  `yaml:"storage"`
 	TLS              TLSConfig      `yaml:"tls"`
 	GitBinary        string         `yaml:"git_binary"`
+	ObjectFormat     string         `yaml:"object_format"`
 	Render           string         `yaml:"render"`
 	DDNS             DDNSConfig     `yaml:"ddns"`
 	DiskMinFreeBytes uint64         `yaml:"disk_min_free_bytes"`
@@ -110,6 +111,7 @@ func DefaultConfig() *GitdConfig {
 			RevocationList: "/etc/gitd/tls/revoked.crl",
 		},
 		GitBinary:        "/usr/local/bin/git",
+		ObjectFormat:     "sha1",
 		Render:           "server",
 		DDNS:             DDNSConfig{Host: "git", Domain: "cmposer.cc", PasswordFile: "/etc/gitd/ddns-password", Interval: Duration(6 * time.Hour)},
 		DiskMinFreeBytes: 512 * 1024 * 1024,
@@ -169,6 +171,11 @@ func (c *GitdConfig) validate() error {
 
 	if c.GitBinary == "" {
 		errf("git_binary: must not be empty")
+	}
+	switch c.ObjectFormat {
+	case "sha1", "sha256":
+	default:
+		errf("object_format: must be sha1|sha256, got %q", c.ObjectFormat)
 	}
 	switch c.Render {
 	case "server", "client", "none":

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func gatewayTestEnv(t *testing.T, hooksDir string) GatewayConfig {
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 	initScript := `if [ "$1" = "init" ]; then
-  d="$4"
+  d="$3"
   mkdir -p "$d/objects" "$d/refs"
   printf 'ref: refs/heads/main\n' > "$d/HEAD"
   exit 0
@@ -304,4 +305,116 @@ func TestServeGitInitFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "init") {
 		t.Fatalf("Serve err = %v, want init failure surfaced", err)
 	}
+}
+
+// realGitGateway builds a GatewayConfig whose git binary is the real git,
+// with the Runner optionally carrying an object format (pinned via
+// GIT_DEFAULT_HASH). Used by the push-to-create object-format tests.
+func realGitGateway(t *testing.T, objectFormat string) GatewayConfig {
+	t.Helper()
+	if _, err := exec.LookPath("/usr/bin/git"); err != nil {
+		t.Skip("git not available")
+	}
+	runner := gitenv.NewRunner("/usr/bin/git", t.TempDir(), os.Getenv("PATH")).WithObjectFormat(objectFormat)
+	return GatewayConfig{
+		ReposRoot: t.TempDir(),
+		Git:       runner,
+		Headroom:  disk.Headroom{MinFree: 0, WarnFree: 0},
+		Log:       slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+}
+
+func TestPushToCreateObjectFormat(t *testing.T) {
+	// New repos default to SHA-1 (the config default; git's built-in default
+	// when no GIT_DEFAULT_HASH is set), and flip to sha256 only via the
+	// configured object format — the hardcoded --object-format flag is gone.
+	for _, tc := range []struct {
+		name         string
+		objectFormat string // "" = git's built-in sha1 default
+		want         string
+	}{
+		{name: "unset uses git sha1 default", objectFormat: "", want: "sha1"},
+		{name: "configured sha1", objectFormat: "sha1", want: "sha1"},
+		{name: "configured sha256 opt-in", objectFormat: "sha256", want: "sha256"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := realGitGateway(t, tc.objectFormat)
+			repoDir := filepath.Join(cfg.ReposRoot, "r.git")
+			if err := pushToCreate(cfg, "r", repoDir); err != nil {
+				t.Fatalf("pushToCreate = %v", err)
+			}
+			cmd := exec.Command("/usr/bin/git", "--git-dir="+repoDir, "rev-parse", "--show-object-format")
+			cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("rev-parse --show-object-format: %v", err)
+			}
+			if got := strings.TrimSpace(string(out)); got != tc.want {
+				t.Errorf("created repo format = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestServePreExistingSHA256Repo(t *testing.T) {
+	// The service still serves a pre-existing SHA-256 repo: push-to-create
+	// takes the EEXIST path (bare sanity check only, never re-inits), the
+	// repo keeps its sha256 format, and a real client push into it succeeds.
+	if _, err := exec.LookPath("/usr/bin/git"); err != nil {
+		t.Skip("git not available")
+	}
+	cfg := gatewayTestEnv(t, "")
+	repoDir := filepath.Join(cfg.ReposRoot, "sha256repo.git")
+	run := func(dir string, args ...string) {
+		cmd := exec.Command("/usr/bin/git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	// A real sha256 bare repo with one commit.
+	work := t.TempDir()
+	run(work, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(work, "config", "user.email", "t@t")
+	run(work, "config", "user.name", "T")
+	if err := os.WriteFile(filepath.Join(work, "a"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(work, "add", "a")
+	run(work, "commit", "-qm", "first")
+	run(t.TempDir(), "clone", "-q", "--bare", work, repoDir)
+
+	// The gateway routes receive-pack to the existing sha256 repo.
+	env := append(identityEnv(), "SSH_ORIGINAL_COMMAND=git-receive-pack sha256repo")
+	var stdout, stderr bytes.Buffer
+	if err := Serve(env, strings.NewReader(""), &stdout, &stderr, cfg); err != nil {
+		t.Fatalf("Serve = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "receive-pack ok") {
+		t.Errorf("stdout = %q, want receive-pack output", stdout.String())
+	}
+	// The repo's format is preserved (push-to-create never re-inits).
+	cmd := exec.Command("/usr/bin/git", "--git-dir="+repoDir, "rev-parse", "--show-object-format")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("rev-parse --show-object-format: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "sha256" {
+		t.Errorf("pre-existing repo format = %q, want sha256", got)
+	}
+	// A real sha256 client push into the repo succeeds. The pusher has no
+	// shared history with the existing main, so it pushes a new branch (a
+	// fresh ref is always accepted; the point is that sha256 objects flow).
+	pusher := t.TempDir()
+	run(pusher, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(pusher, "config", "user.email", "t@t")
+	run(pusher, "config", "user.name", "T")
+	if err := os.WriteFile(filepath.Join(pusher, "b"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(pusher, "add", "b")
+	run(pusher, "commit", "-qm", "second")
+	run(pusher, "push", "-q", repoDir, "HEAD:refs/heads/dev")
 }

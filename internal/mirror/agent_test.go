@@ -454,6 +454,46 @@ func TestVerifyBundleFile(t *testing.T) {
 	}
 }
 
+func TestVerifyBundleFileBothFormats(t *testing.T) {
+	// VerifyBundleFile must detect the bundle's own object format from its
+	// header and verify both SHA-1 and SHA-256 bundles (dual-format
+	// acceptance).
+	for _, tc := range []struct {
+		format string
+		repo   string
+	}{
+		{format: "sha1", repo: "r1"},
+		{format: "sha256", repo: "r2"},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			store := objectstore.NewMemoryStore()
+			m := testAgentMirror(t, store)
+			bare := makeRepoFormat(t, tc.format)
+			if err := os.Rename(bare, filepath.Join(m.reposRoot, tc.repo+".git")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.CreateBundle(context.Background(), tc.repo); err != nil {
+				t.Fatal(err)
+			}
+			keys, err := m.List(context.Background(), tc.repo)
+			if err != nil || len(keys) == 0 {
+				t.Fatalf("keys = %v, err = %v", keys, err)
+			}
+			data, err := m.store.Get(context.Background(), keys[len(keys)-1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "b.bundle")
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.VerifyBundleFile(context.Background(), path); err != nil {
+				t.Fatalf("VerifyBundleFile(%s) = %v", tc.format, err)
+			}
+		})
+	}
+}
+
 func TestVerifyBundleFileCorruptFails(t *testing.T) {
 	m := testAgentMirror(t, objectstore.NewMemoryStore())
 	path := filepath.Join(t.TempDir(), "b.bundle")

@@ -54,7 +54,7 @@ func runServe(args []string, _, _ io.Writer) error {
 	if err != nil {
 		return err
 	}
-	git := gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH"))
+	git := gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH")).WithObjectFormat(gitd.ObjectFormat)
 
 	if os.Getenv("SSH_CONNECTION") != "" {
 		return sshcmd.Serve(os.Environ(), os.Stdin, os.Stdout, os.Stderr, sshcmd.GatewayConfig{

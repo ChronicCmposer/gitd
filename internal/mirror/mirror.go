@@ -161,10 +161,14 @@ func (m *Mirror) Delete(ctx context.Context, repoName string) error {
 }
 
 // Fetch restores repo into dest from its latest bundle (R11-Q5): dest must
-// not exist, then explicit git init --bare --object-format=sha256, bundle
-// verify, unbundle (refs updated from the unbundle listing), audit-log. No
-// git fsck in v1 — bundle verify is the fsck --full equivalent for the
-// bundle (R11-Q5).
+// not exist, then the latest bundle is downloaded, its object format is
+// detected from the bundle header (bundleObjectFormat — both SHA-1 and
+// SHA-256 bundles are accepted), explicit git init --bare
+// --object-format=<detected>, bundle verify, unbundle (refs updated from the
+// unbundle listing), audit-log. The restored repo always matches the bundle's
+// own format, so the service restores SHA-1 and SHA-256 repos alike. No git
+// fsck in v1 — bundle verify is the fsck --full equivalent for the bundle
+// (R11-Q5).
 //
 // Partial-failure cleanup: once this call has created dest (git init
 // succeeded), any later failure removes dest again so a failed restore never
@@ -181,18 +185,6 @@ func (m *Mirror) Fetch(ctx context.Context, repoName, dest string) error {
 		return fmt.Errorf("mirror fetch: mkdir parent: %w", err)
 	}
 
-	if _, err := m.git.Run(ctx, "init", "--bare", "--object-format=sha256", dest); err != nil {
-		return fmt.Errorf("mirror fetch %s: init: %w", repoName, err)
-	}
-	// Fetch created dest; any step that fails after init removes it. Success
-	// clears the flag just before returning, keeping the restored repo.
-	removeCreatedDest := true
-	defer func() {
-		if removeCreatedDest {
-			_ = os.RemoveAll(dest)
-		}
-	}()
-
 	keys, err := m.List(ctx, repoName)
 	if err != nil {
 		return err
@@ -207,6 +199,25 @@ func (m *Mirror) Fetch(ctx context.Context, repoName, dest string) error {
 		return err
 	}
 	defer cleanup()
+
+	// The bundle's own header decides the repo's object format; init must
+	// match it or verify/unbundle fail (fail closed on an unrecognized
+	// header).
+	format, err := bundleObjectFormat(bundlePath)
+	if err != nil {
+		return fmt.Errorf("mirror fetch %s: %w", repoName, err)
+	}
+	if _, err := m.git.Run(ctx, "init", "--bare", "--object-format="+format, dest); err != nil {
+		return fmt.Errorf("mirror fetch %s: init: %w", repoName, err)
+	}
+	// Fetch created dest; any step that fails after init removes it. Success
+	// clears the flag just before returning, keeping the restored repo.
+	removeCreatedDest := true
+	defer func() {
+		if removeCreatedDest {
+			_ = os.RemoveAll(dest)
+		}
+	}()
 
 	// bundle verify needs a repository context; dest is a fresh bare repo.
 	if _, err := m.git.RunIn(ctx, dest, "bundle", "verify", bundlePath); err != nil {

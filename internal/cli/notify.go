@@ -77,7 +77,7 @@ func newNotifier(gitdPath string) (*notifier, error) {
 		gitd:      gitd,
 		webhooks:  webhooks,
 		reposRoot: reposRoot,
-		git:       gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH")),
+		git:       gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH")).WithObjectFormat(gitd.ObjectFormat),
 		spool:     spool.NewStore(spoolDir, time.Now, gitd.Spool.Retention.D(), log),
 		client:    socket.NewClient(socketPath, socketTimeout),
 		now:       time.Now,

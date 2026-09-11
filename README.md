@@ -167,6 +167,7 @@ go run ./cmd/gitd pre-receive --config ...             # pre-receive hook
 go run ./cmd/gitd spool list                           # list spool events (NDJSON)
 go run ./cmd/gitd spool replay <id>                    # re-deliver one event
 go run ./cmd/gitd spool purge                          # remove delivered+expired events
+go run ./cmd/gitd spool help                           # print the spool subcommand reference (exit 0)
 go run ./cmd/gitd mirror list <repo>                   # list S3 bundles
 go run ./cmd/gitd mirror delete <repo>                 # delete a repo's bundles
 go run ./cmd/gitd mirror restore <repo>           # restore from the latest bundle into /srv/git/<repo>.git (serve socket)
@@ -174,7 +175,9 @@ go run ./cmd/gitd ddns --config ...                    # Namecheap dynamic DNS r
 ```
 
 Exit codes: `0` ok, `1` runtime, `2` usage; errors to stderr as
-`gitd: <err>` (R1-Q5).
+`gitd: <err>` (R1-Q5). Bare `gitd spool` no longer defaults to `list`: it
+prints the spool subcommand reference (list/replay/purge/help) as a usage
+error (exit 2), and `gitd spool help` prints the same reference and exits 0.
 
 ## Runbooks (`docs/`)
 
@@ -202,6 +205,13 @@ substituted with the instance's auto-assigned public IP). **After first boot
 the host copies are authoritative** —
 runtime edits are host-plane file edits + `ctr task kill --signal SIGHUP
 gitd-serve` (fail-safe reload).
+
+**Object format.** New repos default to SHA-1 via the `object_format` key
+(`sha1` in `configs/gitd.yaml`, the schema default), and the service hosts,
+serves, and mirrors **both SHA-1 and SHA-256** repos end-to-end — mirror
+restore/verify detect each bundle's own format from its header and init the
+repo accordingly. Set `object_format: sha256` to opt new push-to-create repos
+into SHA-256 ([restore runbook](docs/restore-from-s3.md)).
 
 ## Phase 9 — Mutation Testing Gate (MSI trend)
 

@@ -42,6 +42,7 @@ gitd mirror list
 | `gitd spool list` | admin, direct | NDJSON dump of every spooled webhook event (R13-Q6) |
 | `gitd spool replay <id>` | admin command, serve socket | Re-deliver one event synchronously via `/v1/deliver` (R7-Q8, R12-Q2) |
 | `gitd spool purge` | admin, direct | Remove delivered events past the retention TTL (R6-Q1, R11-Q4) |
+| `gitd spool help` | admin, direct | Print the spool subcommand reference (exit 0); bare `gitd spool` prints the same reference as a usage error (exit 2) |
 | `gitd mirror list [<repo>]` | admin, direct | List a repo's S3 bundles, or with no `<repo>` every repo that has mirrors — `{repo, bundles:[...]}`, one NDJSON object per repo (R13-Q6) |
 | `gitd mirror delete <repo>` | admin, direct | Delete a repo's current bundles from S3 (R6-Q9) |
 | `gitd mirror restore <repo>` | serve + `gitd-restore` agent (socket) | Restore `<repo>` from its latest bundle into `/srv/git/<repo>.git`; serve downloads + verifies the bundle and stages the job, the gitd-restore agent (running as `git`, no elevated caps) writes `/srv/git`, so the repo lands git-owned without admin elevation (R8-Q2, R11-Q5) |
@@ -56,7 +57,9 @@ gitd mirror list
 > `/srv/git/<repo>.git` via `mirror.Restore`. It requires `gitd-serve` and
 > `gitd-restore` to be running, takes exactly `<repo>` (no dest, no
 > `--sha256`), and always restores into `/srv/git/<repo>.git`; the
-> destination must not already exist (fail-fast, no `--force`).
+> destination must not already exist (fail-fast, no `--force`). The restored
+> repo is initialized in the bundle's own object format, detected from its
+> header (SHA-1 or SHA-256) — no manual `--object-format` choice (R10-Q4).
 
 ### Plain operations in the shell (no sudo)
 
@@ -80,7 +83,7 @@ gitd mirror list
 | `serve` | The gateway ForceCommand **and** the daemon. With `SSH_CONNECTION` set it runs the sshcmd gateway (greeting, `git-upload-pack`/`git-receive-pack`); as the `gitd-serve` unit it runs the actions-channel server (socket `/v1/bundle` + `/v1/deliver` + `/v1/restore`, spool sweep, weekly verify, startup catch-up) and the `:443` mTLS browse server (R10-Q1, R12-Q5). |
 | `notify` | Post-receive hook: writes one spool event per ref line (R11-Q1), submits the bundle upload to serve over the socket, and runs sync-mode deliveries. |
 | `pre-receive` | Pre-receive hook: strict stdin parse, statfs disk headroom, fail-closed policy engine (R9-Q7, R7-Q4, R5-Q1). |
-| `spool` | `list` / `replay <id>` / `purge` of the webhook spool; `replay` routes over the serve socket. |
+| `spool` | `list` / `replay <id>` / `purge` of the webhook spool; `replay` routes over the serve socket. Bare `gitd spool` prints this subcommand reference (usage, exit 2); `gitd spool help` prints it and exits 0. |
 | `ddns` | Refresh the Namecheap dynamic DNS record (6h timer; reads `ddns.password_file`, root). |
 | `mirror` | `list [<repo>]` / `delete <repo>` / `restore <repo>` — `list` with no `<repo>` enumerates every mirrored repo (one NDJSON object per repo, R13-Q6); `restore` is serve-orchestrated + agent-executed (serve stages the job over the socket, the `gitd-restore` agent writes `/srv/git/<repo>.git` as git). |
 | `mirror-agent` | Background daemon role (runs in the `gitd-restore` container, not an admin op): scan-then-watches `/var/spool/gitd/restore` and performs git-context restores as the `git` user. |

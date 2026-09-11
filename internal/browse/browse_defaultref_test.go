@@ -25,7 +25,7 @@ func runIn(t *testing.T, dir string, args ...string) {
 func pushIntoBare(t *testing.T, bareDir, branch string) {
 	t.Helper()
 	work := t.TempDir()
-	runIn(t, work, "init", "-q", "-b", branch, "--object-format=sha256", ".")
+	runIn(t, work, "init", "-q", "-b", branch, "--object-format=sha1", ".")
 	runIn(t, work, "config", "user.email", "t@t")
 	runIn(t, work, "config", "user.name", "T")
 	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("# Hi\n"), 0o644); err != nil {
@@ -50,7 +50,7 @@ func defaultRefHandler(t *testing.T, root string) *Handler {
 func TestDefaultRefUnbornHeadMismatch(t *testing.T) {
 	root := t.TempDir()
 	bareDir := filepath.Join(root, "mismatch.git")
-	runIn(t, root, "init", "-q", "--bare", "--object-format=sha256", bareDir)
+	runIn(t, root, "init", "-q", "--bare", "--object-format=sha1", bareDir)
 	pushIntoBare(t, bareDir, "main")
 
 	h := defaultRefHandler(t, root)
@@ -68,7 +68,7 @@ func TestDefaultRefUnbornHeadMismatch(t *testing.T) {
 func TestDefaultRefUnbornHeadMatches(t *testing.T) {
 	root := t.TempDir()
 	bareDir := filepath.Join(root, "match.git")
-	runIn(t, root, "init", "-q", "--bare", "--object-format=sha256", bareDir)
+	runIn(t, root, "init", "-q", "--bare", "--object-format=sha1", bareDir)
 	pushIntoBare(t, bareDir, "master")
 
 	h := defaultRefHandler(t, root)

@@ -23,15 +23,20 @@ bundle into a fresh bare repo under `/srv/git`.
    role + S3), stages it as `<id>.bundle` in `/var/spool/gitd/restore/`, and
    writes the JSON job `<id>.request` for the restore agent.
 2. **The `gitd-restore` agent re-verifies the staged bundle itself** — `git
-   bundle verify` against a fresh bare-repo context (defense in depth; it
-   never trusts serve's prior verify).
+   bundle verify` against a fresh bare-repo context initialized in the
+   bundle's own object format (defense in depth; it never trusts serve's
+   prior verify).
 3. **Destination must not exist.** The agent's `mirror.Restore` fails fast if
    `/srv/git/<repo>.git` already exists (`mirror fetch: destination ...
    already exists`). You cannot restore over an existing repo; no `--force`
    exists.
-4. **Explicit sha256 init.** A fresh bare repo is created with
-   `git init --bare --object-format=sha256 <dest>` — never relies on defaults
-   (R10-Q4).
+4. **Object format detected from the bundle.** The bundle's own header decides
+   the restored repo's format — `# v2 git bundle` means SHA-1, `# v3 git
+   bundle` with `@object-format=sha256` means SHA-256 (fail closed on an
+   unrecognized header). The fresh bare repo is created with
+   `git init --bare --object-format=<detected> <dest>`, so the restored repo
+   always matches the bundle's own format — SHA-1 and SHA-256 repos restore
+   alike, with no manual `--object-format` choice (R10-Q4).
 5. **Bundle verify.** The **latest** bundle is downloaded and `git bundle
    verify` runs against the fresh repo before anything is unbundled — the
    bundle's true "applies cleanly" check.

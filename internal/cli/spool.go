@@ -17,17 +17,27 @@ import (
 // runSpool inspects, replays, and purges the webhook event spool (3.5):
 // list emits NDJSON of full events (envelope + internal state block, R13-Q6),
 // replay <id> re-delivers via POST /v1/deliver over the socket (R12-Q2), and
-// purge removes delivered events past their retention TTL (R6-Q1).
+// purge removes delivered events past their retention TTL (R6-Q1). Bare
+// `gitd spool` and `gitd spool help` print the subcommand reference.
 func runSpool(args []string, stdout, _ io.Writer) error {
 	cfg, rest, err := parseConfigFlag(args)
 	if err != nil {
 		return err
 	}
-	sub := "list"
-	var subArgs []string
-	if len(rest) > 0 {
-		sub = rest[0]
-		subArgs = rest[1:]
+	// Bare `gitd spool` is a usage error: surface the subcommand reference so
+	// list/replay/purge are discoverable (fail-fast, exit 2 on usage).
+	if len(rest) == 0 {
+		return errUsage("%s", spoolUsageText())
+	}
+	sub := rest[0]
+	subArgs := rest[1:]
+	// `gitd spool help` is an explicit help request: print to stdout, exit 0.
+	if sub == "help" {
+		if len(subArgs) != 0 {
+			return errUsage("usage: gitd spool help")
+		}
+		spoolUsage(stdout)
+		return nil
 	}
 	// Validate usage before touching config (fail-fast, exit 2 on usage).
 	switch sub {
@@ -40,7 +50,7 @@ func runSpool(args []string, stdout, _ io.Writer) error {
 			return errUsage("usage: gitd spool replay <event-id>")
 		}
 	default:
-		return errUsage("unknown spool subcommand %q (list|replay|purge)", sub)
+		return errUsage("unknown spool subcommand %q (list|replay|purge|help)", sub)
 	}
 
 	gitd, err := config.LoadGitd(cfg)
@@ -67,6 +77,33 @@ func runSpool(args []string, stdout, _ io.Writer) error {
 		return err
 	}
 	return nil
+}
+
+// spoolUsageText renders the gitd spool subcommand reference: list emits the
+// queued webhook events as NDJSON (envelope + internal state block), replay
+// re-delivers one event to every configured webhook plugin via the serve
+// socket, and purge removes delivered events past their retention TTL.
+func spoolUsageText() string {
+	return `usage: gitd spool <command> [args]
+
+commands:
+  list                emit the queued webhook events as NDJSON (one object per
+                      event: envelope + internal state block). Default
+                      destination is the configured spool dir (/var/spool/gitd)
+  replay <event-id>   re-deliver one event to every configured webhook plugin
+                      synchronously via the serve socket (POST /v1/deliver);
+                      fails loudly if serve is down
+  purge               remove events already delivered past the spool retention
+                      TTL (spool.retention)
+  help                print this reference
+
+exit codes: 0 ok, 1 runtime error, 2 usage error
+`
+}
+
+// spoolUsage writes the gitd spool subcommand reference to w.
+func spoolUsage(w io.Writer) {
+	_, _ = io.WriteString(w, spoolUsageText())
 }
 
 // spoolList emits one NDJSON object per record (R13-Q6).

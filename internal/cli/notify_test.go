@@ -71,7 +71,7 @@ func fakeSocketServer(t *testing.T) (string, *[]string, *[]string) {
 	return path, &bundles, &delivers
 }
 
-// cliBareRepo builds a bare sha256 repo with three commits at root/name.git.
+// cliBareRepo builds a bare sha1 repo with three commits at root/name.git.
 func cliBareRepo(t *testing.T, root, name string) string {
 	t.Helper()
 	work := t.TempDir()
@@ -83,7 +83,7 @@ func cliBareRepo(t *testing.T, root, name string) string {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run(work, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(work, "init", "-q", "-b", "main", "--object-format=sha1", ".")
 	run(work, "config", "user.email", "t@t")
 	run(work, "config", "user.name", "T")
 	for _, f := range []string{"a", "b", "c"} {

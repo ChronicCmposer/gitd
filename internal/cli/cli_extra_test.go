@@ -91,6 +91,7 @@ func TestRunSpoolUsage(t *testing.T) {
 		{"list no args", []string{"spool", "--config", cfg, "list", "x"}, "usage: gitd spool list (no arguments)"},
 		{"purge no args", []string{"spool", "--config", cfg, "purge", "x"}, "usage: gitd spool purge (no arguments)"},
 		{"replay needs id", []string{"spool", "--config", cfg, "replay"}, "usage: gitd spool replay <event-id>"},
+		{"help too many args", []string{"spool", "--config", cfg, "help", "x"}, "usage: gitd spool help"},
 		{"unknown sub", []string{"spool", "--config", cfg, "bogus"}, "unknown spool subcommand"},
 	}
 	for _, tc := range tests {
@@ -103,6 +104,40 @@ func TestRunSpoolUsage(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestRunSpoolBareUsage(t *testing.T) {
+	// Bare `gitd spool` is a usage error: it must surface the subcommand
+	// reference so list/replay/purge are discoverable, not silently default
+	// to list (fail-fast, exit 2 on usage).
+	cfg := writeGitdConfig(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"spool", "--config", cfg}, &stdout, &stderr); code != ExitUsage {
+		t.Errorf("exit = %d, want %d", code, ExitUsage)
+	}
+	for _, want := range []string{"usage: gitd spool <command> [args]", "list", "replay", "purge"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
+		}
+	}
+}
+
+func TestRunSpoolHelp(t *testing.T) {
+	// `gitd spool help` is an explicit help request: the subcommand reference
+	// goes to stdout and the exit code is 0, not a usage error.
+	cfg := writeGitdConfig(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"spool", "--config", cfg, "help"}, &stdout, &stderr); code != ExitOK {
+		t.Errorf("exit = %d, want %d (stderr: %s)", code, ExitOK, stderr.String())
+	}
+	for _, want := range []string{"usage: gitd spool <command>", "list", "replay <event-id>", "purge", "help"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout = %q, want it to contain %q", stdout.String(), want)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
 	}
 }
 

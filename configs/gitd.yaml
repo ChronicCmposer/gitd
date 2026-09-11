@@ -15,6 +15,9 @@ tls:                        # file-path references, root:root 0600 (R1-Q4, R6-Q5
   client_ca: /etc/gitd/tls/client-ca.crt
   revocation_list: /etc/gitd/tls/revoked.crl
 git_binary: /usr/local/bin/git
+object_format: sha1          # default hash for NEW repos (sha1 | sha256); pins GIT_DEFAULT_HASH
+                             # on every git exec so new repos init in this format; the service hosts, serves,
+                             # and mirrors BOTH formats (restore/verify detect the bundle's header); set sha256 to opt new repos in
 render: server              # server | client | none (R3-Q4)
 ddns:                       # gitd ddns subcommand (assumption 10)
   host: git

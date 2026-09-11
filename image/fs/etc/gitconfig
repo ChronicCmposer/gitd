@@ -10,6 +10,11 @@
 
 [init]
 	defaultBranch = main
+	# Belt-and-suspenders default hash for NEW repos (sha1 default, sha256
+	# opt-in). The env GIT_DEFAULT_HASH pinned from config.object_format
+	# overrides this when the operator opts into sha256. Key added in git
+	# 2.47; the image pins 2.53.0.
+	defaultObjectFormat = sha1
 
 [core]
 	hooksPath = /usr/local/lib/gitd/hooks

@@ -35,7 +35,7 @@ func testGit(t *testing.T) *gitenv.Runner {
 	return gitenv.NewRunner(gitBin, t.TempDir(), os.Getenv("PATH"))
 }
 
-// makeRepo creates a bare sha256 repo at root/name.git with a README, a code
+// makeRepo creates a bare sha1 repo at root/name.git with a README, a code
 // file, a nested dir, and 3 commits.
 func makeRepo(t *testing.T, root, name string) {
 	t.Helper()
@@ -48,7 +48,7 @@ func makeRepo(t *testing.T, root, name string) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run(work, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(work, "init", "-q", "-b", "main", "--object-format=sha1", ".")
 	run(work, "config", "user.email", "t@t")
 	run(work, "config", "user.name", "T")
 	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("# Hello\n\n<script>alert(1)</script>\n\n- [x] task\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"), 0o644); err != nil {
@@ -358,6 +358,28 @@ func TestClientRenderModeServesAssets(t *testing.T) {
 	}
 }
 
+func TestStyleSheetPureBlackAppCanvas(t *testing.T) {
+	// The page canvas is pure black (--bg-app #000000) while the Gruvbox
+	// surfaces stay on bg0: the served stylesheet must declare the app
+	// background, apply it to the body, and keep the two depth gradients.
+	h := testHandler(t, "server", nil)
+	rec := get(t, h, "/static/style.css")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("style.css = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"--bg-app: #000000",
+		"var(--bg-app)",
+		"rgba(131,165,152,0.08)", // blue depth wash kept
+		"rgba(254,128,25,0.06)",  // orange depth wash kept
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("style.css missing %q", want)
+		}
+	}
+}
+
 func TestRenderNoneMode(t *testing.T) {
 	h := testHandler(t, "none", nil)
 	makeRepo(t, h.reposRoot, "repo1")
@@ -554,7 +576,7 @@ func makeBigRepo(t *testing.T, root, name string) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run(work, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(work, "init", "-q", "-b", "main", "--object-format=sha1", ".")
 	run(work, "config", "user.email", "t@t")
 	run(work, "config", "user.name", "T")
 	big := bytes.Repeat([]byte("x"), maxRenderBytes+4096)
@@ -694,7 +716,7 @@ func TestBlobServerModePlainUnlexed(t *testing.T) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run(work, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(work, "init", "-q", "-b", "main", "--object-format=sha1", ".")
 	run(work, "config", "user.email", "t@t")
 	run(work, "config", "user.name", "T")
 	if err := os.WriteFile(filepath.Join(work, "notes.zzz"), []byte("<script>alert(1)</script>\nqwerty asdfgh\n"), 0o644); err != nil {

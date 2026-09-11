@@ -29,6 +29,9 @@ func TestDefaultConfig(t *testing.T) {
 	if c.Mirror.VerifyInterval.D() != 7*24*time.Hour {
 		t.Errorf("mirror.verify_interval = %v", c.Mirror.VerifyInterval)
 	}
+	if c.ObjectFormat != "sha1" {
+		t.Errorf("object_format default = %q, want sha1", c.ObjectFormat)
+	}
 }
 
 func writeTemp(t *testing.T, content string) string {
@@ -65,6 +68,19 @@ func TestLoadGitdRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestLoadGitdAcceptsObjectFormat(t *testing.T) {
+	for _, format := range []string{"sha1", "sha256"} {
+		path := writeTemp(t, "object_format: "+format+"\n")
+		c, err := LoadGitd(path)
+		if err != nil {
+			t.Fatalf("LoadGitd(object_format=%s) = %v", format, err)
+		}
+		if c.ObjectFormat != format {
+			t.Errorf("ObjectFormat = %q, want %q", c.ObjectFormat, format)
+		}
+	}
+}
+
 func TestLoadGitdRejectsBadValues(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -73,6 +89,7 @@ func TestLoadGitdRejectsBadValues(t *testing.T) {
 		{name: "bad log level", content: "log:\n  level: loud\n"},
 		{name: "bad storage type", content: "storage:\n  type: gcs\n"},
 		{name: "bad render", content: "render: svg\n"},
+		{name: "bad object format", content: "object_format: sha512\n"},
 		{name: "buffer out of range", content: "serve:\n  actions_buffer_size: 300\n"},
 		{name: "bad duration", content: "spool:\n  retention: nope\n"},
 	}

@@ -33,7 +33,7 @@ func setRuntimePaths(t *testing.T) {
 	})
 }
 
-// cliBareRepoWithCommit creates a bare sha256 repo with one commit at
+// cliBareRepoWithCommit creates a bare sha1 repo with one commit at
 // reposRoot/name.git using the real git, and returns its path.
 func cliBareRepoWithCommit(t *testing.T, reposRoot, name string) string {
 	t.Helper()
@@ -53,7 +53,7 @@ func cliBareRepoWithCommit(t *testing.T, reposRoot, name string) string {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	run(work, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(work, "init", "-q", "-b", "main", "--object-format=sha1", ".")
 	run(work, "config", "user.email", "t@t")
 	run(work, "config", "user.name", "T")
 	if err := os.WriteFile(filepath.Join(work, "a"), []byte("a\n"), 0o644); err != nil {

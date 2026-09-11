@@ -4,6 +4,11 @@
 // fsckObjects, hooksPath, safe.directory, init.defaultBranch), GIT_TERMINAL_PROMPT=0,
 // a writable HOME, and PATH from the image. Output parsing never depends on
 // caller locale or stray GIT_* environment variables.
+//
+// GIT_DEFAULT_HASH is pinned from the configured object format (sha1 default,
+// sha256 opt-in) via Runner.WithObjectFormat; it sets the hash algorithm used
+// by `git init` for NEW repos. It is deliberately omitted when no format is
+// configured, relying on git's built-in sha1 default.
 package gitenv
 
 import (
@@ -19,20 +24,40 @@ import (
 // directory (git needs it for caches/credentials even with the global config
 // disabled). path is the image PATH, passed verbatim. The system gitconfig at
 // /etc/gitconfig is pinned via GIT_CONFIG_SYSTEM and enforced on every exec
-// (fsckObjects, hooksPath, safe.directory, init.defaultBranch).
+// (fsckObjects, hooksPath, safe.directory, init.defaultBranch). objectFormat,
+// when set, pins GIT_DEFAULT_HASH so `git init` creates new repos in that
+// object format (sha1 default, sha256 opt-in); empty means the env var is
+// omitted and git's built-in sha1 default applies.
 type Runner struct {
-	gitBin string
-	home   string
-	path   string
+	gitBin       string
+	home         string
+	path         string
+	objectFormat string
 }
 
 // NewRunner returns a Runner for the given git binary, writable HOME, and
 // PATH. An empty path falls back to the current process PATH (dev/test).
+// The returned Runner carries no GIT_DEFAULT_HASH: git's built-in sha1
+// default applies unless WithObjectFormat is called.
 func NewRunner(gitBin, home, path string) *Runner {
 	if path == "" {
 		path = envPath()
 	}
 	return &Runner{gitBin: gitBin, home: home, path: path}
+}
+
+// WithObjectFormat returns a copy of the Runner that pins GIT_DEFAULT_HASH to
+// f (sha1 or sha256) for every exec, so `git init` creates new repos in that
+// object format. The receiver is never mutated. A non-sha1/sha256 (or empty)
+// f is ignored: the copy keeps the receiver's object format (empty means git's
+// built-in sha1 default). Callers pass the validated config object_format
+// value, so the invalid case is defense-in-depth only.
+func (r *Runner) WithObjectFormat(f string) *Runner {
+	cp := *r
+	if f == "sha1" || f == "sha256" {
+		cp.objectFormat = f
+	}
+	return &cp
 }
 
 func envPath() string {
@@ -59,17 +84,24 @@ func (r *Runner) command(ctx context.Context, name string, args ...string) *exec
 }
 
 // env returns the pinned environment (R9-Q4). PATH is included last so a
-// caller-supplied PATH never shadows it.
+// caller-supplied PATH never shadows it. GIT_DEFAULT_HASH is included only
+// when an object format is configured (WithObjectFormat), so `git init`
+// creates new repos in the configured format; the flag --object-format on a
+// command would take precedence, but no caller passes it.
 func (r *Runner) env() []string {
-	return []string{
+	env := []string{
 		"LC_ALL=C",
 		"TZ=UTC",
 		"GIT_CONFIG_SYSTEM=/etc/gitconfig",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_TERMINAL_PROMPT=0",
 		"HOME=" + r.home,
-		"PATH=" + r.path,
 	}
+	if r.objectFormat != "" {
+		env = append(env, "GIT_DEFAULT_HASH="+r.objectFormat)
+	}
+	env = append(env, "PATH="+r.path)
+	return env
 }
 
 // Run executes the git binary with args and returns stdout. On failure the

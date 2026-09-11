@@ -94,7 +94,7 @@ func runMirror(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	m := mirror.New(store, gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH")),
+	m := mirror.New(store, gitenv.NewRunner(gitd.GitBinary, gitHome, os.Getenv("PATH")).WithObjectFormat(gitd.ObjectFormat),
 		reposRoot, gitd.Storage.Prefix, spoolDir, time.Now, log)
 	ctx := context.Background()
 
