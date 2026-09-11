@@ -39,30 +39,29 @@ and the next push re-validates everything via `receive.fsckObjects` (R11-Q5).
 
 ### On the container shell
 
-Get into the gitd container shell over SSH. `gitd mirror list` / `delete` are
-in the **scoped sudoers** (`image/fs/etc/sudoers`, R8-Q1) and run through the
-admin user's `sudo -u git` elevation:
+Get into the gitd container shell over SSH. `gitd mirror list` / `delete` /
+`fetch` are in the **scoped sudoers** (`image/fs/etc/sudoers`, R8-Q1, extended
+for the restore path) and run through the admin user's `sudo -u git`
+elevation:
 
 ```sh
 # Reach the admin fish shell (cert principals git,admin; R2-Q14).
 ssh git@git.cmposer.cc
-# list/delete are within the scoped NOPASSWD sudoers (R8-Q1/R6-Q9):
+# list/delete/fetch are within the scoped NOPASSWD sudoers (R8-Q1/R6-Q9/R11-Q5):
 sudo -u git gitd mirror list my-repo
 # list with no <repo> enumerates every repo that has mirrors (NDJSON):
 sudo -u git gitd mirror list
+# Restore runs as the git user so the repo lands in /srv/git git-owned:
+sudo -u git gitd mirror fetch <repo>
+# With a custom destination:
+sudo -u git gitd mirror fetch <repo> /srv/git/<repo>.git
 ```
 
-> **`gitd mirror fetch` is a restore-path extension (R8-Q2/R11-Q5) and is
-> deliberately NOT in the R8-Q1 scoped sudoers at HEAD `17c97c2`.** Confirm
-> whether your build grants `sudo -u git gitd mirror fetch <repo>`; if
-> not, run it as the git user directly from an admin-shell context your setup
-> permits, or escalate the sudoers scope in the image build (then rebuild +
-> update in place) before relying on the container-only restore. This is the
-> one verb in the restore story you should verify against the actual build's
-> sudoers.
->
-> (Restore runs entirely in-container via the instance role — there is no
-> `aws` CLI in the image, R6-Q9.)
+> Restore runs entirely in-container via the instance role — there is no
+> `aws` CLI in the image (R6-Q9). The sudoers grant is `gitd mirror fetch *`
+> and `gitd mirror fetch * *` (one wildcard per argument), matching both
+> operand counts. The image rootfs is `--rootfs-ro`, so sudoers is baked at
+> build time — the grant arrives with an image rebuild + in-place update.
 
 Notes:
 
@@ -70,9 +69,11 @@ Notes:
   `<dest>` (the path to create). With no `<dest>`, it restores into
   `/srv/git/<repo>.git` by default so the repo is live and recognizable,
   matching the `/srv/git/<name>.git` layout (R10-Q4).
-- Restoring to a path under a writable mount is required (`/srv/git` is `rw`
-  in the sshd container). The bundle temp download lives under
-  `/var/spool/gitd` (existing rw mount, R5-Q4/R8-Q3).
+- Restore must run as the **git** user: `/srv/git` is `0755 git:git`, so the
+  admin user cannot write it directly — only `git` owns the store. `sudo -u
+  git` elevation is exactly what the scoped sudoers provides, and the restored
+  repo is git-owned so pushes keep working. The bundle temp download lives
+  under `/var/spool/gitd` (existing rw mount, R5-Q4/R8-Q3).
 - `<repo>` is validated against the repo-name allowlist
   `[A-Za-z0-9][A-Za-z0-9._-]{0,99}` (R2-Q1).
 
@@ -133,7 +134,9 @@ Steps, in order:
    ssh git@git.cmposer.cc                        # admin shell
    rm -rf /srv/git/<repo>.git                     # remove the live repo
    ```
-   (`/srv/git` is writable in the sshd container — the `rw` bind mount, R5-Q4.)
+   (`/srv/git` is `0755 git:git` — the admin user cannot write it directly;
+   the `rw` bind mount, R5-Q4, does not change that. The gitd verbs in this
+   procedure run as `git` via the scoped sudoers, R8-Q1.)
 
 2. Remove the current bundle(s) from the S3 mirror:
    ```sh

@@ -40,20 +40,24 @@ sudo -u git gitd spool list
 | `gitd spool purge` | Remove delivered events past the retention TTL (R6-Q1, R11-Q4) |
 | `gitd mirror list [<repo>]` | List a repo's S3 bundles, or with no `<repo>` every repo that has mirrors — `{repo, bundles:[...]}`, one NDJSON object per repo (R13-Q6) |
 | `gitd mirror delete <repo>` | Delete a repo's current bundles (R6-Q9) |
+| `gitd mirror fetch <repo> [dest]` | Restore `<repo>` from its latest bundle into `<dest>` (default `/srv/git/<repo>.git`); runs as git so the restored repo lands git-owned (R8-Q2, R11-Q5) |
 
-> **`gitd mirror fetch` is not in the scoped sudoers list.** The baked sudoers
-> (`image/fs/etc/sudoers`, R8-Q1) permits exactly the five verbs above —
-> `mirror fetch` is **not** among them. If you need a restore
-> (`docs/restore-from-s3.md`), confirm the intended sudoers scope in your
-> build; at HEAD `17c97c2` the v1 scoped list matches R8-Q1 exactly
-> (`list|replay|purge` for spool, `list|delete` for mirror) and does not include
-> `fetch`.
+> **`gitd mirror fetch <repo> [dest]` is in the scoped sudoers.** The baked
+> sudoers (`image/fs/etc/sudoers`, R8-Q1) grants it as `gitd mirror fetch *`
+> and `gitd mirror fetch * *` (one wildcard per argument, matching both
+> operand counts) alongside the spool verbs and `mirror list`/`delete`. The
+> image rootfs is `--rootfs-ro`, so sudoers is baked at build time — the
+> grant arrives with an image rebuild + in-place update
+> (`docs/restore-from-s3.md`).
 
 ### Plain operations in the shell (no sudo)
 
-- `rm -rf /srv/git/<repo>.git` — hard repo deletion (the admin user can write
-  `/srv/git` because it is mounted `rw` in the sshd container, R5-Q4). Always
-  pair with `sudo -u git gitd mirror delete <repo>`; see `docs/restore-from-s3.md`.
+- `rm -rf /srv/git/<repo>.git` — hard repo deletion. The admin user **cannot**
+  write `/srv/git` directly: it is `0755 git:git` (R5-Q4), and the container
+  `rw` bind mount does not make it admin-writable — only the `git` user owns
+  the store. Repo deletion/restore therefore run as the git user via the
+  scoped sudoers; always pair the removal with
+  `sudo -u git gitd mirror delete <repo>`; see `docs/restore-from-s3.md`.
 - The spool directory `/var/spool/gitd` is 0700 `git:git` and event files are
   0600 `git:git` (R4-Q11), so spool file inspection also goes through the
   `sudo -u git gitd spool ...` verbs rather than naked file reads.
