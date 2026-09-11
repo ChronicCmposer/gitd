@@ -161,20 +161,31 @@ func TestClientIPAndCN(t *testing.T) {
 }
 
 func TestWriteErrMapping(t *testing.T) {
+	h, err := New(Config{
+		Git: testGit(t), Serve: &serve.Serve{}, TLS: &tls.Config{},
+		Render: "server", Log: testLog(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		err  error
 		want int
+		body string
 	}{
-		{serve.ErrBusy, http.StatusServiceUnavailable},
-		{serve.ErrShuttingDown, http.StatusServiceUnavailable},
-		{errBadPath, http.StatusNotFound},
-		{errors.New("other"), http.StatusInternalServerError},
+		{serve.ErrBusy, http.StatusServiceUnavailable, "busy\n"},
+		{serve.ErrShuttingDown, http.StatusServiceUnavailable, "shutting down\n"},
+		{errBadPath, http.StatusNotFound, "not found\n"},
+		{errors.New("boom"), http.StatusInternalServerError, "boom\n"},
 	}
 	for _, tc := range tests {
 		rec := httptest.NewRecorder()
-		writeErr(rec, tc.err)
+		h.writeErr(rec, tc.err)
 		if rec.Code != tc.want {
 			t.Errorf("writeErr(%v) = %d, want %d", tc.err, rec.Code, tc.want)
+		}
+		if body := rec.Body.String(); body != tc.body {
+			t.Errorf("writeErr(%v) body = %q, want %q", tc.err, body, tc.body)
 		}
 	}
 }

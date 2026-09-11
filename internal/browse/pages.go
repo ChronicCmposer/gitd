@@ -13,7 +13,10 @@ import (
 )
 
 // writeErr maps render/busy/path errors to the right status (R12-Q1, R5-Q3).
-func writeErr(w http.ResponseWriter, err error) {
+// The 500 branch is deliberately verbose: it surfaces the underlying error
+// text in the body and logs it server-side for the operator (single-user,
+// mTLS + host-allowlist deployment).
+func (h *Handler) writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, serve.ErrBusy):
 		http.Error(w, "busy", http.StatusServiceUnavailable)
@@ -22,7 +25,8 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, errBadPath):
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		h.log.Warn("browse internal error", "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
@@ -31,7 +35,7 @@ func writeErr(w http.ResponseWriter, err error) {
 func (h *Handler) resolveRepo(w http.ResponseWriter, name string) (string, bool) {
 	dir, err := h.repoDir(name)
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return "", false
 	}
 	return dir, true
@@ -56,7 +60,7 @@ func (h *Handler) handleRepoIndex(w http.ResponseWriter, r *http.Request) {
 		return h.renderPage(pageData{Title: "git.cmposer.cc", Body: frag("repolist", repolistData{Repos: items})})
 	})
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 	writeHTML(w, body)
@@ -129,7 +133,7 @@ func (h *Handler) handleRepoHome(w http.ResponseWriter, r *http.Request) {
 		return h.renderPage(pageData{Title: name, Repo: name, RenderMode: h.render, Body: template.HTML(b.String())})
 	})
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 	writeHTML(w, body)
@@ -175,7 +179,7 @@ func (h *Handler) handleLog(w http.ResponseWriter, r *http.Request) {
 		return h.renderPage(pageData{Title: name + " · log", Repo: name, RenderMode: h.render, Body: template.HTML(b.String())})
 	})
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 	writeHTML(w, body)
@@ -192,7 +196,7 @@ func (h *Handler) handleTree(w http.ResponseWriter, r *http.Request) {
 	ref := q.Get("ref")
 	tp, err := cleanRepoPath(q.Get("path"))
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 
@@ -220,7 +224,7 @@ func (h *Handler) handleTree(w http.ResponseWriter, r *http.Request) {
 		return h.renderPage(pageData{Title: name + " · tree", Repo: name, RenderMode: h.render, Body: template.HTML(b.String())})
 	})
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 	writeHTML(w, body)
@@ -238,11 +242,11 @@ func (h *Handler) handleBlob(w http.ResponseWriter, r *http.Request) {
 	ref := q.Get("ref")
 	tp, err := cleanRepoPath(q.Get("path"))
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 	if tp == "" {
-		writeErr(w, errBadPath)
+		h.writeErr(w, errBadPath)
 		return
 	}
 
@@ -283,7 +287,7 @@ func (h *Handler) handleBlob(w http.ResponseWriter, r *http.Request) {
 		return h.renderPage(pageData{Title: name + " · " + tp, Repo: name, RenderMode: h.render, Body: b})
 	})
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 	writeHTML(w, body)
@@ -301,7 +305,7 @@ func (h *Handler) handleRaw(w http.ResponseWriter, r *http.Request) {
 	ref := q.Get("ref")
 	tp, err := cleanRepoPath(q.Get("path"))
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 
@@ -316,7 +320,7 @@ func (h *Handler) handleRaw(w http.ResponseWriter, r *http.Request) {
 		return h.blobAt(ctx, dir, ref, tp)
 	})
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(fileBase(tp)))
@@ -335,7 +339,7 @@ func (h *Handler) handleDiff(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	commit := q.Get("commit")
 	if commit == "" {
-		writeErr(w, errBadPath)
+		h.writeErr(w, errBadPath)
 		return
 	}
 
@@ -346,7 +350,7 @@ func (h *Handler) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return out, err
 	})
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 	if q.Get("raw") == "1" {
@@ -370,7 +374,7 @@ func (h *Handler) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return h.renderPage(pageData{Title: name + " · diff", Repo: name, RenderMode: h.render, Body: body})
 	})
 	if err != nil {
-		writeErr(w, err)
+		h.writeErr(w, err)
 		return
 	}
 	writeHTML(w, body)
