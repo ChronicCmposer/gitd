@@ -77,6 +77,11 @@ type blobData struct {
 	Truncated   bool
 	RenderMode  string
 	RawURL      string
+	// Highlighted marks a server-mode lexed blob whose Body is already a
+	// complete Chroma <pre> block, so the template must not wrap it.
+	Highlighted bool
+	// Lang is the highlight.js language hint for client-mode blobs ("" = none).
+	Lang string
 }
 
 type diffData struct {
@@ -181,15 +186,23 @@ var fragTmpl = template.Must(template.New("fragments").Funcs(template.FuncMap{
 
 {{define "blob"}}
 <div class="panel">
-  <div class="panel-title">{{.Path}}{{if .Truncated}} · truncated to 256KiB — <a href="{{.RawURL}}">raw</a>{{end}}</div>
+  <div class="panel-title blob-title">
+    <span class="blob-path">{{.Path}}</span>
+    {{if .Truncated}}<span class="blob-trunc">truncated to 256KiB</span>{{end}}
+    <a class="blob-download" href="{{.RawURL}}">download</a>
+  </div>
   {{if .IsMarkdown}}
     {{if eq .RenderMode "client"}}
     <div class="markdown" data-markdown="{{.RawMarkdown}}"></div>
     {{else}}
     <div class="markdown">{{.Body}}</div>
     {{end}}
+  {{else if .Highlighted}}
+    {{.Body}}
+  {{else if .Lang}}
+    <pre class="blob hljs" data-lang="{{.Lang}}">{{.Body}}</pre>
   {{else}}
-  <pre class="blob">{{.Body}}</pre>
+    <pre class="blob">{{.Body}}</pre>
   {{end}}
 </div>
 {{end}}

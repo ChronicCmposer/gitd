@@ -219,7 +219,54 @@ a:hover { color: var(--aqua); text-decoration: underline; }
 .diff .meta { color: var(--gray); }
 
 /* Blob view */
+.blob-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+.blob-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.blob-trunc { color: var(--yellow); letter-spacing: 0.06em; }
+.blob-download {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--orange);
+  border: var(--border);
+  border-radius: 3px;
+  padding: 0.12rem 0.5rem;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: var(--bg1);
+}
+.blob-download:hover { color: var(--fg0); border-color: var(--orange); text-decoration: none; }
+
+/* Plain blob fallback: unlexed / binary / pathological / none-mode text.
+ * pre-wrap keeps long lines soft-wrapped since there is no gutter to align. */
 .blob { white-space: pre-wrap; font-size: 12.5px; padding: 0.9rem; overflow-x: auto; }
+
+/* Server-rendered highlighted blob: Chroma emits its own inline-styled
+ * <pre><code> (with a line-number gutter), so we only supply the Gruvbox
+ * frame. white-space: pre keeps the gutter aligned with its code column. */
+.blob-hl {
+  background: var(--bg0);
+  border: var(--border);
+  border-left: 3px solid var(--orange);
+  border-radius: 3px;
+  overflow-x: auto;
+}
+.blob-hl pre { margin: 0; padding: 0.9rem; white-space: pre; }
+
+/* Client-highlighted blob: language hint stamped server-side, tokens filled
+ * in by render-client.js. Same Gruvbox frame as .markdown pre. */
+pre.blob.hljs {
+  white-space: pre;
+  background: var(--bg0);
+  border: var(--border);
+  border-left: 3px solid var(--orange);
+  border-radius: 3px;
+  padding: 0.9rem;
+  overflow-x: auto;
+}
 
 /* Empty repo + notices */
 .empty-repo { text-align: left; padding: 1.2rem; }

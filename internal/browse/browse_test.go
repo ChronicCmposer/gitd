@@ -256,7 +256,9 @@ func TestBlobAndTreeAndRaw(t *testing.T) {
 		t.Fatalf("nested tree failed: %d", sub.Code)
 	}
 	blob := get(t, h, "/repo1/blob?ref=main&path=main.go")
-	if blob.Code != http.StatusOK || !strings.Contains(blob.Body.String(), "func main") {
+	// Server mode now syntax-highlights main.go (Chroma wraps tokens in spans),
+	// so assert on a token substring rather than the raw "func main" text.
+	if blob.Code != http.StatusOK || !strings.Contains(blob.Body.String(), "func") {
 		t.Fatalf("blob page failed: %d", blob.Code)
 	}
 	raw := get(t, h, "/repo1/raw?ref=main&path=main.go")
@@ -579,6 +581,181 @@ func TestBlobTruncationAt256KiB(t *testing.T) {
 	// The rendered page must not contain the full 256KiB+ file.
 	if strings.Count(body, "xxxxx") > 0 && len(body) > maxRenderBytes*2 {
 		t.Errorf("blob page too large: %d bytes", len(body))
+	}
+}
+
+// --- blob syntax highlighting (Q5a/Q11/Q12a/Q15a) ---
+
+func TestResolveBlobLexerByPath(t *testing.T) {
+	cases := []struct {
+		path string
+		want string // lexer Config().Name
+	}{
+		{"Makefile", "Makefile"},
+		{"Dockerfile", "Docker"}, // alias dockerfile is the hljs name
+		{"bin/run.sh", "Bash"},
+	}
+	for _, tc := range cases {
+		lexer := resolveBlobLexer(tc.path, []byte("x = 1\n"))
+		if lexer == nil {
+			t.Errorf("resolveBlobLexer(%q) = nil, want %s", tc.path, tc.want)
+			continue
+		}
+		if got := lexer.Config().Name; got != tc.want {
+			t.Errorf("resolveBlobLexer(%q) lexer = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestResolveBlobLexerUnknownReturnsNil(t *testing.T) {
+	// An unknown extension whose content Chroma cannot sniff -> no highlight.
+	lexer := resolveBlobLexer("notes.zzz", []byte("qwerty asdfgh zxcvbn 1234567890\n"))
+	if lexer != nil {
+		t.Errorf("resolveBlobLexer(unknown) = %q, want nil", lexer.Config().Name)
+	}
+}
+
+func TestResolveBlobLexerBinary(t *testing.T) {
+	// A NUL byte inside the first 8000 bytes marks the blob binary (Q15a).
+	bin := append([]byte("#!/bin/sh\necho hi\n"), 0)
+	lexer := resolveBlobLexer("run.sh", bin)
+	if lexer != nil {
+		t.Errorf("binary blob resolved lexer %q, want nil (Q15a)", lexer.Config().Name)
+	}
+	// A NUL beyond the scan window must not trip the binary check.
+	late := append([]byte(strings.Repeat("x", binaryScanBytes)), 0)
+	if lexer := resolveBlobLexer("run.sh", late); lexer == nil {
+		t.Errorf("NUL beyond scan window still treated as binary")
+	}
+}
+
+func TestResolveBlobLexerPathologicalLine(t *testing.T) {
+	// A single line over the rune budget -> no highlight (Q11).
+	long := strings.Repeat("x", maxPathologicalLine+1) + "\n"
+	if lexer := resolveBlobLexer("long.py", []byte(long)); lexer != nil {
+		t.Errorf("pathological-line blob resolved lexer %q, want nil (Q11)", lexer.Config().Name)
+	}
+	// A long-but-under-threshold line still resolves normally.
+	fine := strings.Repeat("x", maxPathologicalLine-1) + "\n"
+	if lexer := resolveBlobLexer("fine.py", []byte(fine)); lexer == nil {
+		t.Errorf("under-threshold line resolved nil, want a lexer")
+	}
+}
+
+func TestBlobServerModeHighlighting(t *testing.T) {
+	h := testHandler(t, "server", nil)
+	makeRepo(t, h.reposRoot, "repo1")
+
+	// main.go resolves a Go lexer: Chroma renders its own inline-styled
+	// <pre> (WithClasses(false)) with a line-number gutter, and the template
+	// must NOT wrap it in <pre class="blob">.
+	rec := get(t, h, "/repo1/blob?ref=main&path=main.go")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("highlighted blob = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `<pre style="color:#ebdbb2;background-color:#282828`) {
+		t.Errorf("highlighted blob missing Chroma Gruvbox <pre>")
+	}
+	if !strings.Contains(body, "user-select:none") {
+		t.Errorf("highlighted blob missing line-number gutter")
+	}
+	if strings.Contains(body, `<pre class="blob"`) {
+		t.Errorf("highlighted blob must skip the .blob wrapper")
+	}
+}
+
+func TestBlobServerModePlainUnlexed(t *testing.T) {
+	h := testHandler(t, "server", nil)
+	// A repo with a single non-markdown file that has no lexer and cannot be
+	// sniffed: it must render as plain escaped <pre class="blob">.
+	work := t.TempDir()
+	run := func(dir string, args ...string) {
+		cmd := exec.Command(gitBin, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run(work, "init", "-q", "-b", "main", "--object-format=sha256", ".")
+	run(work, "config", "user.email", "t@t")
+	run(work, "config", "user.name", "T")
+	if err := os.WriteFile(filepath.Join(work, "notes.zzz"), []byte("<script>alert(1)</script>\nqwerty asdfgh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(work, "add", "-A")
+	run(work, "commit", "-qm", "add notes")
+	run(h.reposRoot, "clone", "-q", "--bare", work, filepath.Join(h.reposRoot, "plain.git"))
+
+	rec := get(t, h, "/plain/blob?ref=main&path=notes.zzz")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plain blob = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `<pre class="blob">`) {
+		t.Errorf("unlexed blob missing .blob wrapper")
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Errorf("unlexed blob body not escaped (R2-Q6)")
+	}
+	if strings.Contains(body, "<pre style=") {
+		t.Errorf("unlexed blob must not render Chroma output")
+	}
+}
+
+func TestBlobClientModeLanguageHint(t *testing.T) {
+	h := testHandler(t, "client", nil)
+	makeRepo(t, h.reposRoot, "repo1")
+
+	// Lexed blob carries the hljs hint (Go lexer name lowercased).
+	rec := get(t, h, "/repo1/blob?ref=main&path=main.go")
+	body := rec.Body.String()
+	if !strings.Contains(body, `<pre class="blob hljs" data-lang="go">`) {
+		t.Errorf("client blob missing data-lang hint")
+	}
+	if !strings.Contains(body, "func main") {
+		t.Errorf("client blob missing escaped raw body")
+	}
+	// None mode (Q14): plain text exactly as before, no hints, no Chroma.
+	h2 := testHandler(t, "none", nil)
+	makeRepo(t, h2.reposRoot, "repo1")
+	none := get(t, h2, "/repo1/blob?ref=main&path=main.go")
+	nbody := none.Body.String()
+	if strings.Contains(nbody, "<pre style=") || strings.Contains(nbody, "data-lang") {
+		t.Errorf("none mode must not highlight or hint")
+	}
+	if !strings.Contains(nbody, `<pre class="blob">`) {
+		t.Errorf("none mode missing plain .blob wrapper (Q14)")
+	}
+}
+
+func TestBlobDownloadButton(t *testing.T) {
+	h := testHandler(t, "server", nil)
+	makeRepo(t, h.reposRoot, "repo1")
+	makeBigRepo(t, h.reposRoot, "big")
+	cases := []struct {
+		url  string
+		path string
+		repo string
+	}{
+		{"/repo1/blob?ref=main&path=main.go", "main.go", "repo1"},
+		{"/repo1/blob?ref=main&path=README.md", "README.md", "repo1"},
+		{"/big/blob?ref=main&path=big.txt", "big.txt", "big"},
+	}
+	for _, tc := range cases {
+		rec := get(t, h, tc.url)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("blob %s = %d", tc.path, rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `class="blob-download"`) {
+			t.Errorf("blob %s missing download button", tc.path)
+		}
+		want := `href="/` + tc.repo + `/raw?ref=main&amp;path=` + tc.path + `"`
+		if !strings.Contains(body, want) {
+			t.Errorf("blob %s download link does not point to /raw (want %s)", tc.path, want)
+		}
 	}
 }
 

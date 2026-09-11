@@ -37,4 +37,23 @@
       el.textContent = 'markdown render failed: ' + e.message;
     }
   }
+
+  // Server-stamped blobs carry a data-lang hint (Q5a). Highlight with the
+  // named grammar when it is registered in the vendored build; otherwise
+  // fall back to auto-detection so an unlexed-by-hljs name still highlights.
+  var hlBlobs = document.querySelectorAll('pre.blob[data-lang]');
+  for (var k = 0; k < hlBlobs.length; k++) {
+    var b = hlBlobs[k];
+    var lang = b.getAttribute('data-lang') || '';
+    var code = b.textContent;
+    try {
+      if (lang && hljs.getLanguage(lang)) {
+        b.innerHTML = hljs.highlight(code, { language: lang }).value;
+      } else {
+        b.innerHTML = hljs.highlightAuto(code).value;
+      }
+    } catch (e) {
+      b.textContent = 'highlight failed: ' + e.message;
+    }
+  }
 })();

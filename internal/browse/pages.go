@@ -230,8 +230,10 @@ func (h *Handler) handleTree(w http.ResponseWriter, r *http.Request) {
 	writeHTML(w, body)
 }
 
-// handleBlob renders a file: markdown files honor the render toggle; others
-// show as plain text. 256KiB cap (R2-Q7).
+// handleBlob renders a file: markdown files honor the render toggle; other
+// blobs are syntax-highlighted when a lexer resolves (server mode renders
+// Chroma line-numbered HTML, client mode hints the vendored highlight.js) and
+// shown as plain text otherwise. 256KiB cap (R2-Q7).
 func (h *Handler) handleBlob(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("repo")
 	dir, ok := h.resolveRepo(w, name)
@@ -268,6 +270,8 @@ func (h *Handler) handleBlob(w http.ResponseWriter, r *http.Request) {
 		isMarkdown := strings.HasSuffix(strings.ToLower(tp), ".md")
 		rawURL := "/" + name + "/raw?ref=" + ref + "&path=" + tp
 		var bodyHTML template.HTML
+		highlighted := false
+		lang := ""
 		switch {
 		case isMarkdown && h.render == "server":
 			rendered, err := renderMarkdownServer(data)
@@ -275,14 +279,35 @@ func (h *Handler) handleBlob(w http.ResponseWriter, r *http.Request) {
 				return nil, err
 			}
 			bodyHTML = template.HTML(rendered)
-		default:
+		case isMarkdown:
 			bodyHTML = template.HTML(escapeHTML(data))
+		default:
+			// Non-markdown blob: highlight when a lexer resolves (server mode
+			// gets Chroma line-numbered HTML; client mode gets a language
+			// hint for the vendored highlight.js). Binary, pathological-line,
+			// and unmatched blobs stay plain escaped text (Q5a/Q11/Q15a).
+			lexer := resolveBlobLexer(tp, data)
+			switch {
+			case h.render == "server" && lexer != nil:
+				rendered, err := highlightBlobServer(lexer, data)
+				if err != nil {
+					return nil, err
+				}
+				bodyHTML = rendered
+				highlighted = true
+			case h.render == "client" && lexer != nil:
+				lang = strings.ToLower(lexer.Config().Name)
+				bodyHTML = template.HTML(escapeHTML(data))
+			default:
+				bodyHTML = template.HTML(escapeHTML(data))
+			}
 		}
 		b := frag("blob", blobData{
 			Repo: name, Ref: ref, Path: tp,
 			RawMarkdown: string(data), Body: bodyHTML,
 			IsMarkdown: isMarkdown, Truncated: truncated,
 			RenderMode: h.render, RawURL: rawURL,
+			Highlighted: highlighted, Lang: lang,
 		})
 		return h.renderPage(pageData{Title: name + " · " + tp, Repo: name, RenderMode: h.render, Body: b})
 	})
