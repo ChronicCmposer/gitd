@@ -38,7 +38,7 @@ sudo -u git gitd spool list
 | `gitd spool list` | NDJSON dump of every spooled webhook event (R13-Q6) |
 | `gitd spool replay <id>` | Re-deliver one event synchronously via `/v1/deliver` (R7-Q8, R12-Q2) |
 | `gitd spool purge` | Remove delivered events past the retention TTL (R6-Q1, R11-Q4) |
-| `gitd mirror list <repo>` | List a repo's S3 bundles (`{repo, bundles:[...]}`, NDJSON, R13-Q6) |
+| `gitd mirror list [<repo>]` | List a repo's S3 bundles, or with no `<repo>` every repo that has mirrors — `{repo, bundles:[...]}`, one NDJSON object per repo (R13-Q6) |
 | `gitd mirror delete <repo>` | Delete a repo's current bundles (R6-Q9) |
 
 > **`gitd mirror fetch` is not in the scoped sudoers list.** The baked sudoers
@@ -70,7 +70,7 @@ sudo -u git gitd spool list
 | `pre-receive` | Pre-receive hook: strict stdin parse, statfs disk headroom, fail-closed policy engine (R9-Q7, R7-Q4, R5-Q1). |
 | `spool` | `list` / `replay <id>` / `purge` of the webhook spool. |
 | `ddns` | Refresh the Namecheap dynamic DNS record (6h timer; reads `ddns.password_file`, root). |
-| `mirror` | `list <repo>` / `delete <repo>` / `fetch <repo> [dest]` (dest defaults to `/srv/git/<repo>.git`) of S3 bundle mirrors. |
+| `mirror` | `list [<repo>]` / `delete <repo>` / `fetch <repo> [dest]` — `list` with no `<repo>` enumerates every mirrored repo (one NDJSON object per repo, R13-Q6); `fetch` dest defaults to `/srv/git/<repo>.git`. |
 | `version` | Print the link-time version string. |
 
 ## 2. Host plane: SSM Session Manager

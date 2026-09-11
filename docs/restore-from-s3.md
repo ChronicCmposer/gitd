@@ -48,6 +48,8 @@ admin user's `sudo -u git` elevation:
 ssh git@git.cmposer.cc
 # list/delete are within the scoped NOPASSWD sudoers (R8-Q1/R6-Q9):
 sudo -u git gitd mirror list my-repo
+# list with no <repo> enumerates every repo that has mirrors (NDJSON):
+sudo -u git gitd mirror list
 ```
 
 > **`gitd mirror fetch` is a restore-path extension (R8-Q2/R11-Q5) and is
@@ -79,6 +81,8 @@ Notes:
 ```sh
 # Lists the bundle(s) — NDJSON {repo, bundles:[...]} (R13-Q6).
 sudo -u git gitd mirror list my-repo
+# `mirror list` with no <repo> lists every repo that has mirrors.
+sudo -u git gitd mirror list
 # The restored repo should push/pull like a normally-created one.
 ssh git@git.cmposer.cc        # greeting
 git clone git@git.cmposer.cc:my-repo.git /tmp/my-repo-clone

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -188,5 +189,67 @@ func TestUnbundleMalformedOutput(t *testing.T) {
 	// the call fails loudly rather than panicking.
 	if err == nil {
 		t.Fatal("unbundle = nil error on missing bundle")
+	}
+}
+
+func TestListAllRepos(t *testing.T) {
+	store := objectstore.NewMemoryStore()
+	m, _ := testMirror(t, store)
+	ctx := context.Background()
+	for _, key := range []string{
+		"repos/alpha/2026-01-02T03-04-05.123456789Z.bundle",
+		"repos/alpha/2026-01-02T04-04-05.123456789Z.bundle",
+		"repos/beta/2026-01-02T03-04-05.123456789Z.bundle",
+	} {
+		if err := store.Put(ctx, key, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := m.ListAllRepos(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{
+		"alpha": {
+			"repos/alpha/2026-01-02T03-04-05.123456789Z.bundle",
+			"repos/alpha/2026-01-02T04-04-05.123456789Z.bundle",
+		},
+		"beta": {"repos/beta/2026-01-02T03-04-05.123456789Z.bundle"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ListAllRepos = %v, want %v", got, want)
+	}
+}
+
+func TestListAllReposEmpty(t *testing.T) {
+	m, _ := testMirror(t, objectstore.NewMemoryStore())
+	got, err := m.ListAllRepos(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListAllRepos(empty) = %v, want empty map", got)
+	}
+}
+
+func TestListAllReposMalformedKeyFails(t *testing.T) {
+	// A key that is not "<prefix>/<repo>/<ts>.bundle" fails loudly so
+	// corrupted listings surface instead of being silently dropped.
+	for _, key := range []string{
+		"repos/r",         // no bundle segment
+		"repos//x.bundle", // empty repo name
+		"repos/.hidden/x", // repo name outside the allowlist
+	} {
+		t.Run(key, func(t *testing.T) {
+			store := objectstore.NewMemoryStore()
+			m, _ := testMirror(t, store)
+			if err := store.Put(context.Background(), key, []byte("x")); err != nil {
+				t.Fatal(err)
+			}
+			_, err := m.ListAllRepos(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "malformed") {
+				t.Errorf("ListAllRepos(%q) = %v, want malformed-key error", key, err)
+			}
+		})
 	}
 }

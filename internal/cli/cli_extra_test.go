@@ -27,7 +27,7 @@ func TestRunMirrorUsage(t *testing.T) {
 		wants []string
 	}{
 		{"bare needs subcommand", []string{"mirror", "--config", cfg}, []string{"usage: gitd mirror <command>", "list", "delete", "fetch"}},
-		{"list needs repo", []string{"mirror", "--config", cfg, "list"}, []string{"usage: gitd mirror list <repo>"}},
+		{"list too many args", []string{"mirror", "--config", cfg, "list", "a", "b"}, []string{"usage: gitd mirror list [<repo>]"}},
 		{"delete needs repo", []string{"mirror", "--config", cfg, "delete"}, []string{"usage: gitd mirror delete <repo>"}},
 		{"fetch needs repo", []string{"mirror", "--config", cfg, "fetch"}, []string{"usage: gitd mirror fetch <repo>"}},
 		{"fetch too many args", []string{"mirror", "--config", cfg, "fetch", "r", "a", "b"}, []string{"usage: gitd mirror fetch <repo> [dest]"}},
@@ -56,7 +56,7 @@ func TestRunMirrorHelp(t *testing.T) {
 	if code := Run([]string{"mirror", "--config", cfg, "help"}, &stdout, &stderr); code != ExitOK {
 		t.Errorf("exit = %d, want %d (stderr: %s)", code, ExitOK, stderr.String())
 	}
-	for _, want := range []string{"usage: gitd mirror <command>", "list <repo>", "delete <repo>", "fetch <repo> [dest]"} {
+	for _, want := range []string{"usage: gitd mirror <command>", "list [<repo>]", "delete <repo>", "fetch <repo> [dest]"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("stdout = %q, want it to contain %q", stdout.String(), want)
 		}

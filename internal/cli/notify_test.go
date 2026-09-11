@@ -408,6 +408,48 @@ func TestMirrorListNDJSON(t *testing.T) {
 	}
 }
 
+func TestMirrorListAllNDJSON(t *testing.T) {
+	// `gitd mirror list` (no arg) emits one NDJSON {repo, bundles} object per
+	// mirrored repo, sorted by repo name, reusing the single-repo shape
+	// (R13-Q6).
+	store := objectstore.NewMemoryStore()
+	ctx := context.Background()
+	store.Put(ctx, "repos/alpha/2026-01-02T03-04-05.123456789Z.bundle", []byte("x"))
+	store.Put(ctx, "repos/alpha/2026-01-02T04-04-05.123456789Z.bundle", []byte("x"))
+	store.Put(ctx, "repos/beta/2026-01-02T03-04-05.123456789Z.bundle", []byte("x"))
+	git := gitenv.NewRunner(cliGitBin, t.TempDir(), os.Getenv("PATH"))
+	m := mirror.New(store, git, t.TempDir(), "repos", t.TempDir(), time.Now, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	var buf bytes.Buffer
+	if err := mirrorListAll(m, &buf); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("mirror list-all NDJSON lines = %d, want 2: %q", len(lines), buf.String())
+	}
+	if !strings.Contains(lines[0], `"repo":"alpha"`) || !strings.Contains(lines[0], "2026-01-02T03-04-05.123456789Z.bundle") || !strings.Contains(lines[0], "2026-01-02T04-04-05.123456789Z.bundle") {
+		t.Errorf("first line = %q, want alpha with both bundles", lines[0])
+	}
+	if !strings.Contains(lines[1], `"repo":"beta"`) || !strings.Contains(lines[1], "2026-01-02T03-04-05.123456789Z.bundle") {
+		t.Errorf("second line = %q, want beta NDJSON", lines[1])
+	}
+}
+
+func TestMirrorListAllNDJSONEmpty(t *testing.T) {
+	// No mirrored repos: `gitd mirror list` (no arg) emits nothing and
+	// succeeds.
+	store := objectstore.NewMemoryStore()
+	git := gitenv.NewRunner(cliGitBin, t.TempDir(), os.Getenv("PATH"))
+	m := mirror.New(store, git, t.TempDir(), "repos", t.TempDir(), time.Now, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	var buf bytes.Buffer
+	if err := mirrorListAll(m, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("mirror list-all (empty) emitted %q, want nothing", buf.String())
+	}
+}
+
 func TestDDNS(t *testing.T) {
 	old := ddnsEndpoint
 	ddnsEndpoint = ""

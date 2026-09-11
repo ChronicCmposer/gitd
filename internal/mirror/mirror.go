@@ -101,6 +101,49 @@ func (m *Mirror) List(ctx context.Context, repoName string) ([]string, error) {
 	return keys, nil
 }
 
+// ListAllRepos returns every repo that has bundles mapped to its bundle keys
+// (sorted ascending, per the store.List contract), in ONE store.List call so
+// listing all mirrors is not N+1. A repo with no bundles (zero-ref, R9-Q1)
+// has no keys and is therefore absent. Bundle keys are
+// "<prefix>/<repo>/<ts>.bundle" (R11-Q3); a key that does not parse into a
+// valid repo name fails loudly (fail-closed) so corruption surfaces instead
+// of being silently dropped.
+func (m *Mirror) ListAllRepos(ctx context.Context) (map[string][]string, error) {
+	keys, err := m.store.List(ctx, m.prefix+"/")
+	if err != nil {
+		return nil, fmt.Errorf("mirror list-all: %w", err)
+	}
+	repos := make(map[string][]string)
+	for _, key := range keys {
+		repoName, ok := m.repoNameFromKey(key)
+		if !ok {
+			return nil, fmt.Errorf("mirror list-all: malformed key %q", key)
+		}
+		repos[repoName] = append(repos[repoName], key)
+	}
+	return repos, nil
+}
+
+// repoNameFromKey extracts the repo name from a bundle key
+// "<prefix>/<repo>/<ts>.bundle" (R11-Q3): the segment after the prefix slash
+// up to the next slash. It reports false for anything that is not a valid
+// bundle key under the prefix (missing repo segment, empty repo name, or a
+// name outside the repo allowlist).
+func (m *Mirror) repoNameFromKey(key string) (string, bool) {
+	rest, ok := strings.CutPrefix(key, m.prefix+"/")
+	if !ok {
+		return "", false
+	}
+	repoName, _, ok := strings.Cut(rest, "/")
+	if !ok || repoName == "" {
+		return "", false
+	}
+	if !repo.ValidName(repoName) {
+		return "", false
+	}
+	return repoName, true
+}
+
 // Delete removes every bundle for repo (R6-Q9; noncurrent versions expire via
 // the 30d lifecycle).
 func (m *Mirror) Delete(ctx context.Context, repoName string) error {
