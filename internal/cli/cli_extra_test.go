@@ -22,14 +22,16 @@ func writeGitdConfig(t *testing.T) string {
 func TestRunMirrorUsage(t *testing.T) {
 	cfg := writeGitdConfig(t)
 	tests := []struct {
-		name string
-		args []string
-		want string
+		name  string
+		args  []string
+		wants []string
 	}{
-		{"list needs repo", []string{"mirror", "--config", cfg, "list"}, "usage: gitd mirror list <repo>"},
-		{"delete needs repo", []string{"mirror", "--config", cfg, "delete"}, "usage: gitd mirror delete <repo>"},
-		{"fetch needs dest", []string{"mirror", "--config", cfg, "fetch", "r"}, "usage: gitd mirror fetch <repo> <dest>"},
-		{"unknown sub", []string{"mirror", "--config", cfg, "bogus", "r"}, "unknown mirror subcommand"},
+		{"bare needs subcommand", []string{"mirror", "--config", cfg}, []string{"usage: gitd mirror <command>", "list", "delete", "fetch"}},
+		{"list needs repo", []string{"mirror", "--config", cfg, "list"}, []string{"usage: gitd mirror list <repo>"}},
+		{"delete needs repo", []string{"mirror", "--config", cfg, "delete"}, []string{"usage: gitd mirror delete <repo>"}},
+		{"fetch needs repo", []string{"mirror", "--config", cfg, "fetch"}, []string{"usage: gitd mirror fetch <repo>"}},
+		{"fetch too many args", []string{"mirror", "--config", cfg, "fetch", "r", "a", "b"}, []string{"usage: gitd mirror fetch <repo> [dest]"}},
+		{"unknown sub", []string{"mirror", "--config", cfg, "bogus", "r"}, []string{"unknown mirror subcommand"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -37,10 +39,30 @@ func TestRunMirrorUsage(t *testing.T) {
 			if code := Run(tc.args, &stdout, &stderr); code != ExitUsage {
 				t.Errorf("exit = %d, want %d", code, ExitUsage)
 			}
-			if !strings.Contains(stderr.String(), tc.want) {
-				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tc.want)
+			for _, want := range tc.wants {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
+				}
 			}
 		})
+	}
+}
+
+func TestRunMirrorHelp(t *testing.T) {
+	// `gitd mirror help` is an explicit help request: the subcommand reference
+	// goes to stdout and the exit code is 0, not a usage error.
+	cfg := writeGitdConfig(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"mirror", "--config", cfg, "help"}, &stdout, &stderr); code != ExitOK {
+		t.Errorf("exit = %d, want %d (stderr: %s)", code, ExitOK, stderr.String())
+	}
+	for _, want := range []string{"usage: gitd mirror <command>", "list <repo>", "delete <repo>", "fetch <repo> [dest]"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout = %q, want it to contain %q", stdout.String(), want)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
 	}
 }
 

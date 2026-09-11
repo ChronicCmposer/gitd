@@ -86,6 +86,58 @@ func TestFetchNoBundlesFails(t *testing.T) {
 	}
 }
 
+func TestRestoreDefaultsToReposRoot(t *testing.T) {
+	store := objectstore.NewMemoryStore()
+	m, _ := testMirror(t, store)
+	bare := makeRepo(t)
+	if err := os.Rename(bare, filepath.Join(m.reposRoot, "r.git")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.CreateBundle(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	wantHead, err := m.git.RunIn(context.Background(), filepath.Join(m.reposRoot, "r.git"), "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the lost repo: restore must recreate the canonical path
+	// reposRoot/r.git without a caller-supplied dest (R8-Q2/R11-Q5).
+	if err := os.RemoveAll(filepath.Join(m.reposRoot, "r.git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Restore(context.Background(), "r"); err != nil {
+		t.Fatalf("Restore = %v", err)
+	}
+	dest := filepath.Join(m.reposRoot, "r.git")
+	head, err := m.git.RunIn(context.Background(), dest, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("restored rev-parse HEAD: %v", err)
+	}
+	if string(head) != string(wantHead) {
+		t.Errorf("restored HEAD %q != source HEAD %q", head, wantHead)
+	}
+	// Restore into the now-existing canonical path fails fast, like Fetch.
+	err = m.Restore(context.Background(), "r")
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("Restore into existing dest = %v, want already-exists error", err)
+	}
+}
+
+func TestRestoreNoBundlesFails(t *testing.T) {
+	m, _ := testMirror(t, objectstore.NewMemoryStore())
+	err := m.Restore(context.Background(), "r")
+	if err == nil || !strings.Contains(err.Error(), "no bundles") {
+		t.Fatalf("Restore(no bundles) = %v, want no-bundles error", err)
+	}
+}
+
+func TestRestoreInvalidNameFails(t *testing.T) {
+	m, _ := testMirror(t, objectstore.NewMemoryStore())
+	if err := m.Restore(context.Background(), ".bad"); err == nil {
+		t.Fatal("Restore invalid name = nil error")
+	}
+}
+
 func TestFetchInvalidNameFails(t *testing.T) {
 	m, _ := testMirror(t, objectstore.NewMemoryStore())
 	if err := m.Fetch(context.Background(), ".bad", filepath.Join(t.TempDir(), "x.git")); err == nil {

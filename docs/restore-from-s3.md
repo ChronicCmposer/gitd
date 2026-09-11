@@ -15,11 +15,12 @@ bundle into a fresh bare repo under `/srv/git`.
 
 ### The restore sequence (R11-Q5)
 
-`gitd mirror fetch <repo> <dest>` implements exactly this order:
+`gitd mirror fetch <repo> [dest]` implements exactly this order — `<dest>` is
+optional and defaults to `/srv/git/<repo>.git`:
 
-1. **Destination must not exist.** `Fetch` fails fast if `<dest>` already
-   exists (`mirror fetch: destination ... already exists`). You cannot restore
-   over an existing repo; use a fresh path.
+1. **Destination must not exist.** `Fetch` fails fast if the destination
+   already exists (`mirror fetch: destination ... already exists`). You cannot
+   restore over an existing repo; use a fresh path.
 2. **Explicit sha256 init.** A fresh bare repo is created with
    `git init --bare --object-format=sha256 <dest>` — never relies on defaults
    (R10-Q4).
@@ -51,7 +52,7 @@ sudo -u git gitd mirror list my-repo
 
 > **`gitd mirror fetch` is a restore-path extension (R8-Q2/R11-Q5) and is
 > deliberately NOT in the R8-Q1 scoped sudoers at HEAD `17c97c2`.** Confirm
-> whether your build grants `sudo -u git gitd mirror fetch <repo> <dest>`; if
+> whether your build grants `sudo -u git gitd mirror fetch <repo>`; if
 > not, run it as the git user directly from an admin-shell context your setup
 > permits, or escalate the sudoers scope in the image build (then rebuild +
 > update in place) before relying on the container-only restore. This is the
@@ -63,10 +64,10 @@ sudo -u git gitd mirror list my-repo
 
 Notes:
 
-- `fetch` takes two positional args: `<repo>` (the name, allowlist-validated)
-  and `<dest>` (the path to create). Use `/srv/git/<name>.git` as the
-  destination so the repo is live and recognizable, matching the
-  `/srv/git/<name>.git` layout (R10-Q4).
+- `fetch` takes `<repo>` (the name, allowlist-validated) and an optional
+  `<dest>` (the path to create). With no `<dest>`, it restores into
+  `/srv/git/<repo>.git` by default so the repo is live and recognizable,
+  matching the `/srv/git/<name>.git` layout (R10-Q4).
 - Restoring to a path under a writable mount is required (`/srv/git` is `rw`
   in the sshd container). The bundle temp download lives under
   `/var/spool/gitd` (existing rw mount, R5-Q4/R8-Q3).

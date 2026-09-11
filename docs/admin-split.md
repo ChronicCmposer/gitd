@@ -70,7 +70,7 @@ sudo -u git gitd spool list
 | `pre-receive` | Pre-receive hook: strict stdin parse, statfs disk headroom, fail-closed policy engine (R9-Q7, R7-Q4, R5-Q1). |
 | `spool` | `list` / `replay <id>` / `purge` of the webhook spool. |
 | `ddns` | Refresh the Namecheap dynamic DNS record (6h timer; reads `ddns.password_file`, root). |
-| `mirror` | `list <repo>` / `delete <repo>` / `fetch <repo> <dest>` of S3 bundle mirrors. |
+| `mirror` | `list <repo>` / `delete <repo>` / `fetch <repo> [dest]` (dest defaults to `/srv/git/<repo>.git`) of S3 bundle mirrors. |
 | `version` | Print the link-time version string. |
 
 ## 2. Host plane: SSM Session Manager

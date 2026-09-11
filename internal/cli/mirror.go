@@ -17,18 +17,28 @@ import (
 
 // runMirror inspects and manages S3 bundle mirrors (3.4): list <repo> emits
 // NDJSON {repo, bundles:[...]} (R13-Q6), delete <repo> removes every bundle
-// (R6-Q9), and fetch <repo> <dest> restores from the latest bundle (R8-Q2,
-// R11-Q5).
-func runMirror(args []string, stdout, _ io.Writer) error {
+// (R6-Q9), and fetch <repo> [dest] restores from the latest bundle (R8-Q2,
+// R11-Q5), defaulting dest to reposRoot/<repo>.git when omitted. Bare
+// `gitd mirror` and `gitd mirror help` print the subcommand reference.
+func runMirror(args []string, stdout, stderr io.Writer) error {
 	cfg, rest, err := parseConfigFlag(args)
 	if err != nil {
 		return err
 	}
-	sub := "list"
-	var subArgs []string
-	if len(rest) > 0 {
-		sub = rest[0]
-		subArgs = rest[1:]
+	// Bare `gitd mirror` is a usage error: surface the subcommand reference so
+	// fetch/list/delete are discoverable (fail-fast, exit 2 on usage).
+	if len(rest) == 0 {
+		return errUsage("%s", mirrorUsageText())
+	}
+	sub := rest[0]
+	subArgs := rest[1:]
+	// `gitd mirror help` is an explicit help request: print to stdout, exit 0.
+	if sub == "help" {
+		if len(subArgs) != 0 {
+			return errUsage("usage: gitd mirror help")
+		}
+		mirrorUsage(stdout)
+		return nil
 	}
 	// Validate usage before touching config (fail-fast, exit 2 on usage).
 	switch sub {
@@ -37,8 +47,8 @@ func runMirror(args []string, stdout, _ io.Writer) error {
 			return errUsage("usage: gitd mirror %s <repo>", sub)
 		}
 	case "fetch":
-		if len(subArgs) != 2 {
-			return errUsage("usage: gitd mirror fetch <repo> <dest>")
+		if len(subArgs) < 1 || len(subArgs) > 2 {
+			return errUsage("usage: gitd mirror fetch <repo> [dest]")
 		}
 	default:
 		return errUsage("unknown mirror subcommand %q (list|delete|fetch)", sub)
@@ -66,9 +76,32 @@ func runMirror(args []string, stdout, _ io.Writer) error {
 	case "delete":
 		return m.Delete(ctx, subArgs[0])
 	case "fetch":
+		if len(subArgs) == 1 {
+			return m.Restore(ctx, subArgs[0])
+		}
 		return m.Fetch(ctx, subArgs[0], subArgs[1])
 	}
 	return nil
+}
+
+// mirrorUsageText renders the gitd mirror subcommand reference: fetch dest is
+// optional and defaults to reposRoot/<repo>.git (/srv/git/<repo>.git).
+func mirrorUsageText() string {
+	return `usage: gitd mirror <command> [args]
+
+commands:
+  list <repo>           list S3 bundle mirrors for <repo>
+  delete <repo>         delete all bundle mirrors for <repo>
+  fetch <repo> [dest]   restore <repo> from its latest bundle into <dest>
+                        (dest defaults to /srv/git/<repo>.git)
+
+exit codes: 0 ok, 1 runtime error, 2 usage error
+`
+}
+
+// mirrorUsage writes the gitd mirror subcommand reference to w.
+func mirrorUsage(w io.Writer) {
+	_, _ = io.WriteString(w, mirrorUsageText())
 }
 
 // storeFor builds the configured objectstore backend (s3 in v1, R6-Q7).

@@ -163,6 +163,14 @@ func (m *Mirror) Fetch(ctx context.Context, repoName, dest string) error {
 	return nil
 }
 
+// Restore restores repo into its canonical bare path under reposRoot
+// (reposRoot/<repo>.git) using Fetch's default destination (R8-Q2/R11-Q5).
+// It is the no-dest form of Fetch: dest fails fast if reposRoot/<repo>.git
+// already exists, same as Fetch.
+func (m *Mirror) Restore(ctx context.Context, repoName string) error {
+	return m.Fetch(ctx, repoName, filepath.Join(m.reposRoot, repoName+".git"))
+}
+
 // unbundle unpacks the bundle into a fresh bare repo and updates the refs it
 // lists (git bundle unbundle only prints the refs; the caller applies them).
 // HEAD is skipped so the repo keeps its symbolic HEAD from git init; if that
