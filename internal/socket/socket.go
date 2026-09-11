@@ -125,15 +125,17 @@ func trim(s string) string {
 	return s
 }
 
-// RestoreRequest is the POST /v1/restore body (serve-owned mirror restore).
+// RestoreRequest is the POST /v1/restore body (serve-orchestrated mirror
+// restore).
 type RestoreRequest struct {
 	Repo string `json:"repo"`
 }
 
 // Restore submits a synchronous mirror restore of repo to serve over the
-// socket. Serve owns /srv/git, so the restored repo lands git-owned without
-// any admin elevation. Any non-2xx reply is an error: the CLI surfaces it so
-// the operator knows the restore failed.
+// socket. Serve downloads + verifies the bundle and dispatches the restore to
+// the gitd-restore agent, which writes /srv/git/<repo>.git as the git user —
+// no admin elevation needed. Any non-2xx reply is an error: the CLI surfaces
+// it so the operator knows the restore failed.
 func (c *Client) Restore(ctx context.Context, repo string) error {
 	body, err := json.Marshal(RestoreRequest{Repo: repo})
 	if err != nil {

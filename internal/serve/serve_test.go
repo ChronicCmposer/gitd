@@ -59,6 +59,13 @@ func (d *deliveredLog) all() []string {
 // testServe wires a Serve with a MemoryStore-backed mirror, a recording
 // deliverer, and the given plugin list.
 func testServe(t *testing.T, plugins []config.PluginConfig) (*Serve, *deliveredLog, *spool.Store) {
+	srv, delivered, store, _ := testServeStore(t, plugins)
+	return srv, delivered, store
+}
+
+// testServeStore is testServe plus the objectstore backing the mirror, so
+// restore tests can run a real mirror-agent against the same store.
+func testServeStore(t *testing.T, plugins []config.PluginConfig) (*Serve, *deliveredLog, *spool.Store, *objectstore.MemoryStore) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reposRoot := t.TempDir()
@@ -67,7 +74,8 @@ func testServe(t *testing.T, plugins []config.PluginConfig) (*Serve, *deliveredL
 	sockPath := filepath.Join(t.TempDir(), "gitd.sock")
 
 	store := spool.NewStore(spoolDir, time.Now, 90*24*time.Hour, log)
-	m := mirror.New(objectstore.NewMemoryStore(), testGit(t), reposRoot, "repos", workDir, time.Now, log)
+	objStore := objectstore.NewMemoryStore()
+	m := mirror.New(objStore, testGit(t), reposRoot, "repos", workDir, time.Now, log)
 
 	delivered := &deliveredLog{}
 	deliver := func(_ context.Context, pluginID, eventID string) error {
@@ -81,13 +89,26 @@ func testServe(t *testing.T, plugins []config.PluginConfig) (*Serve, *deliveredL
 		Webhooks:       func() *config.WebhooksConfig { return wh },
 		Deliver:        deliver,
 		ReposRoot:      reposRoot,
+		RestoreDir:     filepath.Join(t.TempDir(), "restore"),
 		SocketPath:     sockPath,
 		Now:            time.Now,
 		Log:            log,
 		SweepInterval:  0,
 		VerifyInterval: 0,
 	})
-	return srv, delivered, store
+	return srv, delivered, store, objStore
+}
+
+// testRestoreAgent runs a real mirror-agent on srv's restore spool against
+// the same objectstore, and returns a stop func.
+func testRestoreAgent(t *testing.T, srv *Serve, store *objectstore.MemoryStore) func() {
+	t.Helper()
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	am := mirror.New(store, testGit(t), srv.reposRoot, "repos", t.TempDir(), time.Now, log)
+	agent := mirror.NewAgent(mirror.AgentConfig{Mirror: am, WorkDir: srv.restoreDir, ReposRoot: srv.reposRoot, Log: log})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = agent.Run(ctx) }()
+	return cancel
 }
 
 // makeBareRepo creates a bare sha256 repo with one commit at reposRoot/name.git.
@@ -166,10 +187,12 @@ func TestServeBundleUpload(t *testing.T) {
 }
 
 func TestServeRestoreRoundTrip(t *testing.T) {
-	// End-to-end over a real unix socket: the restore client submits to the
-	// serve handler, which restores the canonical repo path (serve owns
-	// /srv/git). Seed a bundle, drop the live repo, then restore it back.
-	srv, _, _ := testServe(t, nil)
+	// End-to-end over a real unix socket with the real mirror-agent: the
+	// restore client submits to the serve handler, serve stages the job,
+	// the agent re-verifies the staged bundle and writes /srv/git/r.git as
+	// git, and serve replies 200 after reading the result. Seed a bundle,
+	// drop the live repo, then restore it back.
+	srv, _, _, store := testServeStore(t, nil)
 	makeBareRepo(t, srv.reposRoot, "r")
 	if _, err := srv.mirror.CreateBundle(context.Background(), "r"); err != nil {
 		t.Fatal(err)
@@ -178,13 +201,23 @@ func TestServeRestoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	runServe(t, srv)
+	stopAgent := testRestoreAgent(t, srv, store)
+	defer stopAgent()
 
-	c := socket.NewClient(srv.socketPath, 5*time.Second)
+	c := socket.NewClient(srv.socketPath, 30*time.Second)
 	if err := c.Restore(context.Background(), "r"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(srv.reposRoot, "r.git")); err != nil {
 		t.Errorf("restored repo missing: %v", err)
+	}
+	// Serve consumed the job files after reading the result.
+	entries, err := os.ReadDir(srv.restoreDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("restore spool not cleaned after result: %v", entries)
 	}
 }
 

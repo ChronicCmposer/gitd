@@ -7,8 +7,10 @@
 // webhook plugin registry); unknown plugin-ids reply 404-style (R13-Q8). The
 // control mux (/v1/bundle, /v1/deliver, /v1/restore) is served on the unix
 // socket; the browse :443 mux mounts only /v1/bundle + /v1/deliver (Phase 5),
-// so /v1/restore stays socket-only — the serve-owned /srv/git write path never
-// appears on :443. All channel submissions wait up to 10s for a slot then
+// so /v1/restore stays socket-only. Restore is dispatched to the git-context
+// mirror-agent via the /var/spool/gitd/restore job spool — serve never
+// writes /srv/git (its container mounts it ro and lacks CAP_CHOWN); see
+// mirror.Agent. All channel submissions wait up to 10s for a slot then
 // reply 503 busy (R12-Q1); notify's 60s socket client timeout (R11-Q3) is the
 // outer bound.
 package serve
@@ -22,6 +24,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,6 +72,7 @@ type Config struct {
 	Webhooks          func() *config.WebhooksConfig // live (SIGHUP-reloadable) plugins
 	Deliver           func(ctx context.Context, pluginID, eventID string) error
 	ReposRoot         string
+	RestoreDir        string // restore job spool for the mirror-agent (/var/spool/gitd/restore)
 	SocketPath        string
 	Now               func() time.Time
 	Log               *slog.Logger
@@ -88,6 +93,7 @@ type Serve struct {
 	webhooks       func() *config.WebhooksConfig
 	deliver        func(ctx context.Context, pluginID, eventID string) error
 	reposRoot      string
+	restoreDir     string
 	socketPath     string
 	now            func() time.Time
 	log            *slog.Logger
@@ -113,6 +119,7 @@ func New(cfg Config) *Serve {
 		webhooks:       cfg.Webhooks,
 		deliver:        cfg.Deliver,
 		reposRoot:      cfg.ReposRoot,
+		restoreDir:     cfg.RestoreDir,
 		socketPath:     cfg.SocketPath,
 		now:            cfg.Now,
 		log:            cfg.Log,
@@ -130,13 +137,16 @@ func (s *Serve) Run(ctx context.Context) error {
 	s.startWorker()
 
 	// Startup catch-up + one sweep run before socket work is accepted
-	// (R10-Q9, R6-Q1): sequential through the channel, audit-logged.
+	// (R10-Q9, R6-Q1): sequential through the channel, audit-logged. The
+	// restore-spool sweep runs here too (startup only — the periodic sweep
+	// must never touch in-flight restore jobs).
 	if err := s.catchUp(); err != nil {
 		return err
 	}
 	startupDone := make(chan struct{})
 	s.actions <- func(sv *Serve) {
 		sv.sweepOnce()
+		sv.sweepRestoreSpool()
 		close(startupDone)
 	}
 	<-startupDone
@@ -189,9 +199,10 @@ func (s *Serve) Submit(act func(*Serve)) error { return s.submit(act) }
 // SocketHandler returns the mux for the socket control endpoints (/v1/bundle,
 // /v1/deliver, /v1/restore). It is mounted on the unix-socket server (Run)
 // and, at only the /v1/bundle + /v1/deliver paths, behind the browse :443 mux
-// (Phase 5) — /v1/restore is deliberately socket-only, so the serve-owned
-// /srv/git write path is never reachable from :443. Both paths keep the
-// actions-channel discipline and the R13-Q9 read-header/body caps.
+// (Phase 5) — /v1/restore is deliberately socket-only: the restore staging
+// path (serve dispatching to the git-context agent) is never reachable from
+// :443. Both paths keep the actions-channel discipline and the R13-Q9
+// read-header/body caps.
 func (s *Serve) SocketHandler() http.Handler { return s.handler() }
 
 // submit queues act for the worker, waiting up to submitWait (R12-Q1). It
@@ -369,15 +380,138 @@ func (s *Serve) bundleAction(repoName string) (mirror.BundleResult, error) {
 	return result, fmt.Errorf("serve: bundle %s: %w", repoName, err)
 }
 
-// restoreAction restores repo into its canonical bare path via the mirror.
-// Serve owns /srv/git, so the restored repo lands git-owned without admin
-// elevation. Runs inside the worker so restore is serialized with all other
-// serve work (global FIFO).
-func (s *Serve) restoreAction(repoName string) error {
-	if err := s.mirror.Restore(context.Background(), repoName); err != nil {
-		return fmt.Errorf("serve: restore %s: %w", repoName, err)
+// restoreResultDeadline bounds serve's wait for the mirror-agent's
+// <id>.result: 4m30s, inside the admin client's 5-minute budget
+// (cli.restoreTimeout). It is a var so tests can shrink it.
+var restoreResultDeadline = 4*time.Minute + 30*time.Second
+
+// restoreStageResult is the worker's reply for a staged restore job: the job
+// id (empty on failure) plus any staging error.
+type restoreStageResult struct {
+	id  string
+	err error
+}
+
+// stageRestoreJob downloads + verifies the latest bundle for repo and stages
+// a restore job for the mirror-agent, returning the job id. It runs inside
+// the worker (serialized with all other serve work) and never writes the
+// repo store: the gitd-restore agent performs the /srv/git write.
+func (s *Serve) stageRestoreJob(repoName string) (string, error) {
+	id, err := spool.NewID()
+	if err != nil {
+		return "", fmt.Errorf("serve: restore %s: job id: %w", repoName, err)
 	}
-	return nil
+	if err := os.MkdirAll(s.restoreDir, 0o770); err != nil {
+		return "", fmt.Errorf("serve: restore %s: mkdir %s: %w", repoName, s.restoreDir, err)
+	}
+	data, err := s.mirror.LatestBundle(context.Background(), repoName)
+	if err != nil {
+		return "", fmt.Errorf("serve: restore %s: %w", repoName, err)
+	}
+	bundlePath := filepath.Join(s.restoreDir, id+mirror.JobBundleExt)
+	if err := os.WriteFile(bundlePath, data, 0o644); err != nil {
+		return "", fmt.Errorf("serve: restore %s: stage bundle: %w", repoName, err)
+	}
+	// Fail fast: verify the staged bundle before handing it to the agent
+	// (defense in depth — the agent re-verifies too, so a forged or corrupt
+	// bundle is caught here and again at the write path).
+	if err := s.mirror.VerifyBundleFile(context.Background(), bundlePath); err != nil {
+		_ = os.Remove(bundlePath)
+		return "", fmt.Errorf("serve: restore %s: bundle verify: %w", repoName, err)
+	}
+	// Hand the job to the agent. The request is written atomically (temp +
+	// rename) so the agent's watcher never sees a half-written job, and the
+	// bundle is staged before the request so a request event implies its
+	// bundle is complete.
+	reqData, err := json.Marshal(mirror.JobRequest{Repo: repoName, Bundle: id + mirror.JobBundleExt})
+	if err != nil {
+		_ = os.Remove(bundlePath)
+		return "", fmt.Errorf("serve: restore %s: encode request: %w", repoName, err)
+	}
+	if err := mirror.WriteJobFile(s.restoreDir, id+mirror.JobRequestExt, reqData, 0o644); err != nil {
+		_ = os.Remove(bundlePath)
+		return "", fmt.Errorf("serve: restore %s: stage request: %w", repoName, err)
+	}
+	s.log.Info("restore job staged for mirror-agent", "repo", repoName, "id", id, "bundle", id+mirror.JobBundleExt)
+	return id, nil
+}
+
+// waitRestoreResult polls the spool for <id>.result up to
+// restoreResultDeadline. It returns the agent's outcome; a timeout reports
+// that the restore is still in progress — the agent completes it regardless
+// and serve's startup sweep handles the leftover files.
+func (s *Serve) waitRestoreResult(id string) (*mirror.JobResult, error) {
+	resultPath := filepath.Join(s.restoreDir, id+mirror.JobResultExt)
+	deadline := time.After(restoreResultDeadline)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			return nil, fmt.Errorf("restore still in progress (mirror-agent slow); the agent will complete it and serve's startup sweep handles leftovers")
+		case <-ticker.C:
+			data, err := os.ReadFile(resultPath)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read restore result: %w", err)
+			}
+			res, err := mirror.DecodeJobResult(data)
+			if err != nil {
+				return nil, fmt.Errorf("decode restore result: %w", err)
+			}
+			return res, nil
+		}
+	}
+}
+
+// cleanupRestoreJob removes the staged bundle, request, and result for id
+// (serve-owned cleanup after the outcome is read; os.Remove is idempotent,
+// so a job the agent already consumed is a no-op).
+func (s *Serve) cleanupRestoreJob(id string) {
+	for _, name := range []string{id + mirror.JobBundleExt, id + mirror.JobRequestExt, id + mirror.JobResultExt} {
+		if err := os.Remove(filepath.Join(s.restoreDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.log.Warn("restore job cleanup", "id", id, "file", name, "error", err)
+		}
+	}
+}
+
+// sweepRestoreSpool removes leftover restore job files from a crash or a
+// timed-out wait. Serve owns the jobs it orchestrated: after a crash serve
+// no longer tracks them, so they must never linger or re-trigger. It runs at
+// serve startup only — the periodic sweep must not touch in-flight jobs.
+// The mirror-agent still processes leftover <id>.request files it finds on
+// its own startup (legitimate crash leftovers); the race between the two is
+// benign (see the mirror.Agent package comment on stale-job ownership).
+func (s *Serve) sweepRestoreSpool() {
+	entries, err := os.ReadDir(s.restoreDir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.log.Warn("restore spool sweep: read dir", "error", err)
+		}
+		return
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, mirror.JobBundleExt) &&
+			!strings.HasSuffix(name, mirror.JobRequestExt) &&
+			!strings.HasSuffix(name, mirror.JobResultExt) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.restoreDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.log.Warn("restore spool sweep: remove", "file", name, "error", err)
+			continue
+		}
+		removed++
+	}
+	if removed > 0 {
+		s.log.Info("restore spool sweep removed stale jobs", "count", removed)
+	}
 }
 
 // unlinkStaleSocket removes a leftover socket from an unclean shutdown, only
@@ -508,10 +642,13 @@ func (s *Serve) pluginConfigured(id string) bool {
 	return false
 }
 
-// handleRestore serves POST /v1/restore: a synchronous mirror restore in the
-// channel (the serve-owned /srv/git write path). 200 on success; 400 invalid
-// repo / bad body; 503 busy when the channel is full (R12-Q1); 500 on restore
-// failure.
+// handleRestore serves POST /v1/restore: serve downloads + verifies the
+// latest S3 bundle, stages a restore job for the git-context mirror-agent,
+// waits for the agent's <id>.result under restoreResultDeadline, and cleans
+// up the staged files. Serve never writes /srv/git — the gitd-restore agent
+// does. 200 on success; 400 invalid repo / bad body; 503 busy when the
+// channel is full (R12-Q1); staging/agent failures and the timeout surface
+// as non-2xx with a clear message.
 func (s *Serve) handleRestore(w http.ResponseWriter, r *http.Request) {
 	var req socket.RestoreRequest
 	if err := decodeStrict(w, r, &req); err != nil {
@@ -523,23 +660,45 @@ func (s *Serve) handleRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reply := make(chan error, 1)
-	act := func(sv *Serve) { reply <- sv.restoreAction(req.Repo) }
+	// Staging runs inside the worker (serialized with all other serve work);
+	// the result wait runs in the request goroutine so the worker stays free
+	// for bundles/deliveries while the agent works.
+	reply := make(chan restoreStageResult, 1)
+	act := func(sv *Serve) {
+		jobID, err := sv.stageRestoreJob(req.Repo)
+		reply <- restoreStageResult{id: jobID, err: err}
+	}
 	if err := s.submit(act); err != nil {
 		writeServeError(w, err)
 		return
 	}
+	var staged restoreStageResult
 	select {
-	case err := <-reply:
-		if err != nil {
-			writeServeError(w, err)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
+	case staged = <-reply:
 	case <-r.Context().Done():
-		// Client disconnected; the restore action still completes and the
+		// Client disconnected; the staging action still completes and the
 		// buffered reply is discarded.
+		return
 	}
+	if staged.err != nil {
+		writeServeError(w, staged.err)
+		return
+	}
+
+	res, err := s.waitRestoreResult(staged.id)
+	if err != nil {
+		// Timeout / unreadable result: leave the staged files in place — the
+		// agent still completes the restore and serve's startup sweep handles
+		// leftovers.
+		writeServeError(w, err)
+		return
+	}
+	s.cleanupRestoreJob(staged.id)
+	if !res.OK {
+		writeServeError(w, fmt.Errorf("restore failed: %s", res.Message))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // decodeStrict decodes a JSON body with DisallowUnknownFields (parse-don't-

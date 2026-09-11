@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -102,6 +103,7 @@ func runServe(args []string, _, _ io.Writer) error {
 		Webhooks:          rt.Webhooks,
 		Deliver:           deliverer.Deliver,
 		ReposRoot:         reposRoot,
+		RestoreDir:        filepath.Join(spoolDir, "restore"),
 		SocketPath:        socketPath,
 		Now:               time.Now,
 		Log:               log,

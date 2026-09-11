@@ -2,6 +2,7 @@ package serve
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ChronicCmposer/gitd/internal/config"
 	"github.com/ChronicCmposer/gitd/internal/event"
+	"github.com/ChronicCmposer/gitd/internal/mirror"
 	"github.com/ChronicCmposer/gitd/internal/socket"
 	"github.com/ChronicCmposer/gitd/internal/spool"
 )
@@ -141,10 +143,11 @@ func TestHandleRestoreBusy(t *testing.T) {
 	}
 }
 
-func TestHandleRestoreFailure(t *testing.T) {
-	// A repo with no bundles: Restore fails after git init and the handler
-	// maps the failure to 500 via writeServeError.
-	srv, _, _ := testServe(t, nil)
+func TestHandleRestoreStagingFailure(t *testing.T) {
+	// A repo with no bundles: staging fails at the LatestBundle download and
+	// the handler maps the failure to 500 via writeServeError — nothing is
+	// written to the repo store (the agent performs the write).
+	srv, _, _, _ := testServeStore(t, nil)
 	srv.startWorker()
 	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":"ghost"}`)
 	if rec.Code != http.StatusInternalServerError {
@@ -152,10 +155,32 @@ func TestHandleRestoreFailure(t *testing.T) {
 	}
 }
 
+// writeFakeRestoreResult waits for the first <id>.request in the restore
+// spool and writes <id>.result with payload, simulating the mirror-agent's
+// outcome without real git. It returns an error (tests run it in a
+// goroutine, so it must not call t.Fatal).
+func writeFakeRestoreResult(srv *Serve, payload string) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(srv.restoreDir)
+		if err == nil {
+			for _, e := range entries {
+				if strings.HasSuffix(e.Name(), mirror.JobRequestExt) {
+					id := strings.TrimSuffix(e.Name(), mirror.JobRequestExt)
+					return mirror.WriteJobFile(srv.restoreDir, id+mirror.JobResultExt, []byte(payload), 0o644)
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fmt.Errorf("no restore request appeared in the spool")
+}
+
+// TestHandleRestoreOK dispatches to a REAL mirror-agent: serve stages the
+// job, the agent re-verifies the staged bundle and restores the canonical
+// path, and serve replies 200 after reading the result.
 func TestHandleRestoreOK(t *testing.T) {
-	// Seed a bundle for r, remove the live repo, then restore through the
-	// handler: the canonical path must come back and the reply must be 200.
-	srv, _, _ := testServe(t, nil)
+	srv, _, _, store := testServeStore(t, nil)
 	makeBareRepo(t, srv.reposRoot, "r")
 	if _, err := srv.mirror.CreateBundle(context.Background(), "r"); err != nil {
 		t.Fatal(err)
@@ -164,6 +189,13 @@ func TestHandleRestoreOK(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.startWorker()
+	stopAgent := testRestoreAgent(t, srv, store)
+	defer stopAgent()
+
+	old := restoreResultDeadline
+	restoreResultDeadline = 15 * time.Second
+	defer func() { restoreResultDeadline = old }()
+
 	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":"r"}`)
 	if rec.Code != http.StatusOK {
 		t.Errorf("restore status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
@@ -171,6 +203,143 @@ func TestHandleRestoreOK(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(srv.reposRoot, "r.git")); err != nil {
 		t.Errorf("restored repo missing: %v", err)
 	}
+	// Serve consumed the staged files after reading the result.
+	entries, err := os.ReadDir(srv.restoreDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("restore spool not cleaned: %v", entries)
+	}
+}
+
+func TestHandleRestoreAgentError(t *testing.T) {
+	// Serve stages the job, then the agent reports a failure in <id>.result:
+	// the handler must surface the agent's message as a non-2xx.
+	srv, _, _, _ := testServeStore(t, nil)
+	makeBareRepo(t, srv.reposRoot, "r")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	srv.startWorker()
+	go func() { _ = writeFakeRestoreResult(srv, `{"ok":false,"message":"agent exploded"}`) }()
+
+	old := restoreResultDeadline
+	restoreResultDeadline = 5 * time.Second
+	defer func() { restoreResultDeadline = old }()
+
+	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":"r"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("agent-error status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "agent exploded") {
+		t.Errorf("agent error body = %q, want it to surface the agent message", rec.Body.String())
+	}
+}
+
+func TestHandleRestoreTimeout(t *testing.T) {
+	// No agent writes a result: the handler returns the clear timeout error
+	// under restoreResultDeadline, and the staged files are LEFT in place —
+	// the agent still completes the restore and serve's startup sweep
+	// handles leftovers.
+	srv, _, _, _ := testServeStore(t, nil)
+	makeBareRepo(t, srv.reposRoot, "r")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	srv.startWorker()
+
+	old := restoreResultDeadline
+	restoreResultDeadline = 300 * time.Millisecond
+	defer func() { restoreResultDeadline = old }()
+
+	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":"r"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("timeout status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "still in progress") {
+		t.Errorf("timeout body = %q, want clear in-progress message", rec.Body.String())
+	}
+	// The staged request + bundle remain for the agent / next startup sweep.
+	entries, err := os.ReadDir(srv.restoreDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestSeen := false
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), mirror.JobRequestExt) {
+			requestSeen = true
+		}
+	}
+	if !requestSeen {
+		t.Errorf("staged request removed on timeout, want leftover for the agent (files: %v)", entries)
+	}
+}
+
+func TestHandleRestoreVerifyFailure(t *testing.T) {
+	// A corrupt stored bundle: serve's own bundle verify fails fast at
+	// staging, returns a clean 500, and never stages a job for the agent.
+	srv, _, _, store := testServeStore(t, nil)
+	makeBareRepo(t, srv.reposRoot, "r")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "r"); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := srv.mirror.List(context.Background(), "r")
+	if err != nil || len(keys) == 0 {
+		t.Fatalf("list keys = %v, err = %v", keys, err)
+	}
+	if err := store.Put(context.Background(), keys[0], []byte("not a bundle")); err != nil {
+		t.Fatal(err)
+	}
+	srv.startWorker()
+
+	old := restoreResultDeadline
+	restoreResultDeadline = 2 * time.Second
+	defer func() { restoreResultDeadline = old }()
+
+	rec := doRequest(t, srv, http.MethodPost, "/v1/restore", `{"repo":"r"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("verify-failure status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+	// Fail fast: no request and no bundle left in the spool.
+	entries, err := os.ReadDir(srv.restoreDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), mirror.JobRequestExt) || strings.HasSuffix(e.Name(), mirror.JobBundleExt) {
+			t.Errorf("job staged despite corrupt bundle: %v", e.Name())
+		}
+	}
+}
+
+func TestSweepRestoreSpoolRemovesLeftovers(t *testing.T) {
+	srv, _, _ := testServe(t, nil)
+	if err := os.MkdirAll(srv.restoreDir, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"dead.request", "dead.bundle", "dead.result",
+		"keep.txt", // unrelated files are untouched
+	} {
+		if err := os.WriteFile(filepath.Join(srv.restoreDir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.sweepRestoreSpool()
+	entries, err := os.ReadDir(srv.restoreDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "keep.txt" {
+		t.Errorf("after sweep = %v, want only keep.txt", entries)
+	}
+}
+
+func TestSweepRestoreSpoolMissingDir(t *testing.T) {
+	// A restore dir that does not exist (first boot) is a silent no-op.
+	srv, _, _ := testServe(t, nil)
+	srv.sweepRestoreSpool()
 }
 
 func TestDeliverAllActionNoPlugins(t *testing.T) {
