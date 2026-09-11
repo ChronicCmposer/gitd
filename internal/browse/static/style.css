@@ -376,6 +376,22 @@ pre.blob.hljs {
   padding: 0.9rem;
 }
 
+/* Code typography: browsers apply a UA default of `monospace` to pre/code
+ * elements, which would override the Monaspace Neon inherited from body.
+ * These element/base selectors cover every code surface — Chroma and
+ * highlight.js frames, plain and highlighted blobs, README code blocks,
+ * diffs, and inline code. Because style.css loads last, these equal- or
+ * higher-specificity rules beat the UA default and any vendored theme
+ * font-family; token spans inherit from their frame. */
+pre, code, kbd, samp,
+.chroma, .hljs,
+.blob, .blob-hl, pre.blob.hljs,
+.markdown pre, .markdown pre code, .markdown code,
+.diff pre,
+.empty-repo .hint code {
+  font-family: var(--font-mono);
+}
+
 /* Code frames: hide the horizontal scrollbar while keeping overflow-x: auto
  * so long lines still scroll — same cross-browser technique as the page
  * root (Firefox scrollbar-width, WebKit pseudo-element). */
