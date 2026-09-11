@@ -2,12 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ChronicCmposer/gitd/internal/socket"
 )
 
 // writeGitdConfig writes a minimal valid gitd.yaml for CLI entry tests.
@@ -26,11 +31,12 @@ func TestRunMirrorUsage(t *testing.T) {
 		args  []string
 		wants []string
 	}{
-		{"bare needs subcommand", []string{"mirror", "--config", cfg}, []string{"usage: gitd mirror <command>", "list", "delete", "fetch"}},
+		{"bare needs subcommand", []string{"mirror", "--config", cfg}, []string{"usage: gitd mirror <command>", "list", "delete", "restore"}},
 		{"list too many args", []string{"mirror", "--config", cfg, "list", "a", "b"}, []string{"usage: gitd mirror list [<repo>]"}},
 		{"delete needs repo", []string{"mirror", "--config", cfg, "delete"}, []string{"usage: gitd mirror delete <repo>"}},
-		{"fetch needs repo", []string{"mirror", "--config", cfg, "fetch"}, []string{"usage: gitd mirror fetch <repo>"}},
-		{"fetch too many args", []string{"mirror", "--config", cfg, "fetch", "r", "a", "b"}, []string{"usage: gitd mirror fetch <repo> [dest]"}},
+		{"restore needs repo", []string{"mirror", "--config", cfg, "restore"}, []string{"usage: gitd mirror restore <repo>"}},
+		{"restore too many args", []string{"mirror", "--config", cfg, "restore", "r", "a"}, []string{"usage: gitd mirror restore <repo>"}},
+		{"fetch is gone", []string{"mirror", "--config", cfg, "fetch", "r"}, []string{"unknown mirror subcommand"}},
 		{"unknown sub", []string{"mirror", "--config", cfg, "bogus", "r"}, []string{"unknown mirror subcommand"}},
 	}
 	for _, tc := range tests {
@@ -56,7 +62,7 @@ func TestRunMirrorHelp(t *testing.T) {
 	if code := Run([]string{"mirror", "--config", cfg, "help"}, &stdout, &stderr); code != ExitOK {
 		t.Errorf("exit = %d, want %d (stderr: %s)", code, ExitOK, stderr.String())
 	}
-	for _, want := range []string{"usage: gitd mirror <command>", "list [<repo>]", "delete <repo>", "fetch <repo> [dest]"} {
+	for _, want := range []string{"usage: gitd mirror <command>", "list [<repo>]", "delete <repo>", "restore <repo>"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("stdout = %q, want it to contain %q", stdout.String(), want)
 		}
@@ -209,5 +215,60 @@ func TestRunMirrorListPath(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"mirror", "--config", cfgPath, "list", "r"}, &stdout, &stderr); code != ExitError {
 		t.Errorf("mirror list exit = %d, want %d (stderr: %s)", code, ExitError, stderr.String())
+	}
+}
+
+func TestRunMirrorRestoreSubmitsToSocket(t *testing.T) {
+	// restore must submit to the serve socket and must NOT build the S3
+	// store: the config below has no storage section, so a storeFor attempt
+	// would fail at runtime. A successful restore through a fake serve socket
+	// therefore proves the socket routing.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "gitd.yaml")
+	os.WriteFile(cfgPath, []byte("ddns:\n  host: git\n  domain: cmposer.cc\n  password_file: "+filepath.Join(dir, "pw")+"\n"), 0o600)
+
+	sock := filepath.Join(t.TempDir(), "gitd.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	gotRepo := ""
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/restore", func(w http.ResponseWriter, r *http.Request) {
+		var req socket.RestoreRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		gotRepo = req.Repo
+		w.WriteHeader(http.StatusOK)
+	})
+	go http.Serve(ln, mux)
+
+	oldSocketPath := socketPath
+	socketPath = sock
+	defer func() { socketPath = oldSocketPath }()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"mirror", "--config", cfgPath, "restore", "r"}, &stdout, &stderr); code != ExitOK {
+		t.Errorf("restore exit = %d, want %d (stderr: %s)", code, ExitOK, stderr.String())
+	}
+	if gotRepo != "r" {
+		t.Errorf("socket received repo %q, want r", gotRepo)
+	}
+}
+
+func TestRunMirrorRestoreServeDown(t *testing.T) {
+	// A missing serve socket must fail loudly at runtime (exit 1), not hang
+	// or silently succeed.
+	cfg := writeGitdConfig(t)
+	oldSocketPath := socketPath
+	socketPath = filepath.Join(t.TempDir(), "missing.sock")
+	defer func() { socketPath = oldSocketPath }()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"mirror", "--config", cfg, "restore", "r"}, &stdout, &stderr); code != ExitError {
+		t.Errorf("restore serve-down exit = %d, want %d (stderr: %s)", code, ExitError, stderr.String())
 	}
 }

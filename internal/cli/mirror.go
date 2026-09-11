@@ -14,21 +14,29 @@ import (
 	"github.com/ChronicCmposer/gitd/internal/mirror"
 	"github.com/ChronicCmposer/gitd/internal/objectstore"
 	"github.com/ChronicCmposer/gitd/internal/objectstore/s3"
+	"github.com/ChronicCmposer/gitd/internal/socket"
 )
+
+// restoreTimeout bounds a socket mirror-restore round-trip (5 minutes: serve
+// downloads + verifies + unbundles a bundle under /srv/git). A fixed constant
+// so the CLI never hangs on a wedged serve.
+const restoreTimeout = 5 * time.Minute
 
 // runMirror inspects and manages S3 bundle mirrors (3.4): list [<repo>] emits
 // NDJSON {repo, bundles:[...]} (R13-Q6) — with no <repo> it emits one object
 // per mirrored repo — delete <repo> removes every bundle (R6-Q9), and
-// fetch <repo> [dest] restores from the latest bundle (R8-Q2, R11-Q5),
-// defaulting dest to reposRoot/<repo>.git when omitted. Bare `gitd mirror`
-// and `gitd mirror help` print the subcommand reference.
+// restore <repo> restores from the latest bundle into /srv/git/<repo>.git
+// (R8-Q2, R11-Q5). Restore is serve-owned and routes through the serve socket
+// (POST /v1/restore): serve writes /srv/git, so the admin never needs
+// elevation. list/delete run directly as admin (they only touch S3). Bare
+// `gitd mirror` and `gitd mirror help` print the subcommand reference.
 func runMirror(args []string, stdout, stderr io.Writer) error {
 	cfg, rest, err := parseConfigFlag(args)
 	if err != nil {
 		return err
 	}
 	// Bare `gitd mirror` is a usage error: surface the subcommand reference so
-	// fetch/list/delete are discoverable (fail-fast, exit 2 on usage).
+	// restore/list/delete are discoverable (fail-fast, exit 2 on usage).
 	if len(rest) == 0 {
 		return errUsage("%s", mirrorUsageText())
 	}
@@ -52,18 +60,27 @@ func runMirror(args []string, stdout, stderr io.Writer) error {
 		if len(subArgs) != 1 {
 			return errUsage("usage: gitd mirror %s <repo>", sub)
 		}
-	case "fetch":
-		if len(subArgs) < 1 || len(subArgs) > 2 {
-			return errUsage("usage: gitd mirror fetch <repo> [dest]")
+	case "restore":
+		if len(subArgs) != 1 {
+			return errUsage("usage: gitd mirror restore <repo>")
 		}
 	default:
-		return errUsage("unknown mirror subcommand %q (list|delete|fetch)", sub)
+		return errUsage("unknown mirror subcommand %q (list|delete|restore)", sub)
 	}
 
 	gitd, err := config.LoadGitd(cfg)
 	if err != nil {
 		return err
 	}
+
+	switch sub {
+	case "restore":
+		// Restore is serve-owned: submit to the serve socket, which writes
+		// /srv/git as the serve process. No S3 store or mirror is built here,
+		// and the admin never needs elevation.
+		return mirrorRestore(subArgs[0])
+	}
+
 	log, err := gitd.NewLogger(os.Stderr)
 	if err != nil {
 		return err
@@ -84,18 +101,21 @@ func runMirror(args []string, stdout, stderr io.Writer) error {
 		return mirrorListAll(m, stdout)
 	case "delete":
 		return m.Delete(ctx, subArgs[0])
-	case "fetch":
-		if len(subArgs) == 1 {
-			return m.Restore(ctx, subArgs[0])
-		}
-		return m.Fetch(ctx, subArgs[0], subArgs[1])
 	}
 	return nil
 }
 
+// mirrorRestore submits a mirror restore of repo to the serve socket. Serve
+// owns /srv/git, so the restored repo lands git-owned without admin elevation.
+// The 5-minute client timeout bounds a long restore; serve down fails loudly.
+func mirrorRestore(repoName string) error {
+	return socket.NewClient(socketPath, restoreTimeout).Restore(context.Background(), repoName)
+}
+
 // mirrorUsageText renders the gitd mirror subcommand reference: list with no
-// <repo> enumerates every mirrored repo; fetch dest is optional and defaults
-// to reposRoot/<repo>.git (/srv/git/<repo>.git).
+// <repo> enumerates every mirrored repo; restore is serve-owned, always
+// targets /srv/git/<repo>.git, and runs through the serve socket (no dest
+// arg, no sudo).
 func mirrorUsageText() string {
 	return `usage: gitd mirror <command> [args]
 
@@ -103,8 +123,9 @@ commands:
   list [<repo>]         list S3 bundle mirrors; with no <repo>, lists every
                         repo that has mirrors (one NDJSON object per repo)
   delete <repo>         delete all bundle mirrors for <repo>
-  fetch <repo> [dest]   restore <repo> from its latest bundle into <dest>
-                        (dest defaults to /srv/git/<repo>.git)
+  restore <repo>        restore <repo> from its latest bundle into
+                        /srv/git/<repo>.git (serve-owned: submitted to the
+                        gitd-serve socket, which writes /srv/git as serve)
 
 exit codes: 0 ok, 1 runtime error, 2 usage error
 `
