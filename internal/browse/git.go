@@ -72,14 +72,28 @@ func (h *Handler) refs(ctx context.Context, dir string) ([]string, error) {
 	return refs, nil
 }
 
-// defaultRef returns the repo HEAD symbolic ref short name, or "main" if HEAD
-// is unborn/dangling. Used when no ?ref= is supplied.
+// defaultRef returns the repo HEAD symbolic ref short name, or the first
+// existing ref, or "main" when HEAD is unborn and no refs exist. Used when no
+// ?ref= is supplied.
 func (h *Handler) defaultRef(ctx context.Context, dir string) (string, error) {
 	out, err := h.git.RunIn(ctx, dir, "symbolic-ref", "--short", "HEAD")
 	if err != nil {
 		return "main", nil // unborn HEAD -> empty repo default
 	}
-	return strings.TrimSpace(string(out)), nil
+	ref := strings.TrimSpace(string(out))
+	// A fresh bare repo's unborn HEAD (e.g. "master") names a branch with no
+	// commits once a client pushes a differently-named branch (e.g. "main"):
+	// symbolic-ref succeeds for an unborn HEAD, so the name alone is not a
+	// resolvable ref. Verify it resolves; if not, fall back to an existing
+	// branch so commitLog/ls-tree don't 500 on an ambiguous argument.
+	if resolved, verr := h.git.RunIn(ctx, dir, "rev-parse", "--verify", "--quiet", ref); verr != nil || strings.TrimSpace(string(resolved)) == "" {
+		refs, rerr := h.refs(ctx, dir)
+		if rerr == nil && len(refs) > 0 {
+			return refs[0], nil
+		}
+		return "main", nil
+	}
+	return ref, nil
 }
 
 // commitLog returns up to pageSizeCommits commits for ref, skipping skip.
