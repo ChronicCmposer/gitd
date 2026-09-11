@@ -29,6 +29,9 @@ func TestDefaultConfig(t *testing.T) {
 	if c.Mirror.VerifyInterval.D() != 7*24*time.Hour {
 		t.Errorf("mirror.verify_interval = %v", c.Mirror.VerifyInterval)
 	}
+	if !c.Mirror.RestoreOnStart {
+		t.Error("mirror.restore_on_start default = false, want true")
+	}
 	if c.ObjectFormat != "sha1" {
 		t.Errorf("object_format default = %q, want sha1", c.ObjectFormat)
 	}
@@ -78,6 +81,21 @@ func TestLoadGitdAcceptsObjectFormat(t *testing.T) {
 		if c.ObjectFormat != format {
 			t.Errorf("ObjectFormat = %q, want %q", c.ObjectFormat, format)
 		}
+	}
+}
+
+func TestLoadGitdLayersRestoreOnStart(t *testing.T) {
+	// Default is true; an explicit false must override the default.
+	path := writeTemp(t, "mirror:\n  restore_on_start: false\n")
+	c, err := LoadGitd(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Mirror.RestoreOnStart {
+		t.Error("mirror.restore_on_start = true, want false override")
+	}
+	if c.Mirror.VerifyInterval.D() != 7*24*time.Hour {
+		t.Errorf("mirror.verify_interval default lost: %v", c.Mirror.VerifyInterval)
 	}
 }
 

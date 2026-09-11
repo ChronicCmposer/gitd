@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -78,7 +79,8 @@ type Config struct {
 	Log               *slog.Logger
 	SweepInterval     time.Duration
 	VerifyInterval    time.Duration
-	ActionsBufferSize int // serve.actions_buffer_size (R9-Q11); 0 = default 64
+	RestoreOnStart    bool // mirror.restore_on_start: stage restore jobs for S3-mirrored repos missing on disk at startup
+	ActionsBufferSize int  // serve.actions_buffer_size (R9-Q11); 0 = default 64
 }
 
 // Serve is the actions-channel server. It is safe to submit from any
@@ -99,6 +101,7 @@ type Serve struct {
 	log            *slog.Logger
 	sweepInterval  time.Duration
 	verifyInterval time.Duration
+	restoreOnStart bool
 	httpSrv        *http.Server
 }
 
@@ -125,6 +128,7 @@ func New(cfg Config) *Serve {
 		log:            cfg.Log,
 		sweepInterval:  cfg.SweepInterval,
 		verifyInterval: cfg.VerifyInterval,
+		restoreOnStart: cfg.RestoreOnStart,
 	}
 }
 
@@ -147,6 +151,7 @@ func (s *Serve) Run(ctx context.Context) error {
 	s.actions <- func(sv *Serve) {
 		sv.sweepOnce()
 		sv.sweepRestoreSpool()
+		sv.restoreMissingOnStart()
 		close(startupDone)
 	}
 	<-startupDone
@@ -512,6 +517,58 @@ func (s *Serve) sweepRestoreSpool() {
 	}
 	if removed > 0 {
 		s.log.Info("restore spool sweep removed stale jobs", "count", removed)
+	}
+}
+
+// restoreMissingOnStart stages a restore job for every repo that has S3
+// bundle mirrors but is missing on disk. It runs once at serve startup,
+// inside the worker (after the restore-spool sweep, before the socket accepts
+// work), and is deliberately best-effort:
+//
+//   - An unreachable objectstore (ListAllRepos fails) or an unreadable repos
+//     root (ListBare fails) logs a warning and skips the pass — serve must
+//     start even when S3 is down.
+//   - The diff is additive/non-destructive by construction: only repos
+//     present in S3 AND absent on disk are staged; local-only repos are never
+//     touched, and mirror.Restore itself fails fast on an existing dest.
+//   - A per-repo staging failure is logged and skipped, with no retry — a
+//     corrupt bundle would otherwise hot-loop at every startup.
+//
+// The mirror-agent picks staged jobs up asynchronously (it scan-then-watches
+// the restore spool), so serve never writes /srv/git itself.
+func (s *Serve) restoreMissingOnStart() {
+	if !s.restoreOnStart {
+		return
+	}
+	mirrored, err := s.mirror.ListAllRepos(context.Background())
+	if err != nil {
+		s.log.Warn("restore-on-start skipped: listing mirrors failed", "error", err)
+		return
+	}
+	live, err := repo.ListBare(s.reposRoot)
+	if err != nil {
+		s.log.Warn("restore-on-start skipped: listing live repos failed", "error", err)
+		return
+	}
+	liveSet := make(map[string]struct{}, len(live))
+	for _, name := range live {
+		liveSet[name] = struct{}{}
+	}
+	var missing []string
+	for name := range mirrored {
+		if _, ok := liveSet[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) == 0 {
+		return
+	}
+	s.log.Info("restoring missing repo(s)", "count", len(missing))
+	for _, name := range missing {
+		if _, err := s.stageRestoreJob(name); err != nil {
+			s.log.Error("restore-on-start staging failed", "repo", name, "error", err)
+		}
 	}
 }
 

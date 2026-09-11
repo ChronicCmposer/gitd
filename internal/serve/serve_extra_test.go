@@ -1,7 +1,10 @@
 package serve
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +15,8 @@ import (
 	"time"
 
 	"github.com/ChronicCmposer/gitd/internal/event"
+	"github.com/ChronicCmposer/gitd/internal/mirror"
+	"github.com/ChronicCmposer/gitd/internal/objectstore"
 )
 
 func TestSubmitExecutesAction(t *testing.T) {
@@ -174,5 +179,203 @@ func TestUnlinkStaleSocketStatError(t *testing.T) {
 	srv.socketPath = filepath.Join(t.TempDir(), "sub", "missing.sock")
 	if err := srv.unlinkStaleSocket(); err != nil {
 		t.Fatalf("unlinkStaleSocket(ENOENT) = %v, want nil", err)
+	}
+}
+
+// captureServeLog points srv's logger at a buffer so tests can assert the
+// restore-on-start summary/warning lines.
+func captureServeLog(srv *Serve) *bytes.Buffer {
+	var buf bytes.Buffer
+	srv.log = slog.New(slog.NewTextHandler(&buf, nil))
+	return &buf
+}
+
+// failListStore breaks the objectstore's List to simulate an unreachable S3
+// at startup; the embedded store still satisfies the rest of the seam.
+type failListStore struct {
+	objectstore.Store
+}
+
+func (failListStore) List(_ context.Context, _ string) ([]string, error) {
+	return nil, errors.New("s3 unreachable")
+}
+
+func TestRestoreMissingOnStartStagesMissingRepos(t *testing.T) {
+	// The diff must be additive/non-destructive: repos mirrored in S3 but
+	// missing on disk are staged for the mirror-agent; local-only repos are
+	// never touched.
+	srv, _, _, store := testServeStore(t, nil)
+	srv.restoreOnStart = true
+	buf := captureServeLog(srv)
+
+	// "a": mirrored in S3, missing on disk -> must be restored.
+	makeBareRepo(t, srv.reposRoot, "a")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(srv.reposRoot, "a.git")); err != nil {
+		t.Fatal(err)
+	}
+	// "b": live on disk with no mirror -> local-only, must be left alone.
+	makeBareRepo(t, srv.reposRoot, "b")
+	// "c": mirrored in S3, missing on disk -> must be restored.
+	makeBareRepo(t, srv.reposRoot, "c")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "c"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(srv.reposRoot, "c.git")); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.restoreMissingOnStart()
+
+	// One startup summary line with the diff count.
+	if !strings.Contains(buf.String(), "restoring missing repo(s)") {
+		t.Errorf("summary log line missing: %q", buf.String())
+	}
+
+	// The mirror-agent picks the staged jobs up and restores a and c.
+	stopAgent := testRestoreAgent(t, srv, store)
+	defer stopAgent()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		_, errA := os.Stat(filepath.Join(srv.reposRoot, "a.git"))
+		_, errC := os.Stat(filepath.Join(srv.reposRoot, "c.git"))
+		if errA == nil && errC == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(filepath.Join(srv.reposRoot, "a.git")); err != nil {
+		t.Errorf("mirrored-and-missing repo a not restored: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(srv.reposRoot, "c.git")); err != nil {
+		t.Errorf("mirrored-and-missing repo c not restored: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(srv.reposRoot, "b.git")); err != nil {
+		t.Errorf("local-only repo b was disturbed: %v", err)
+	}
+}
+
+func TestRestoreMissingOnStartDisabled(t *testing.T) {
+	// restore_on_start=false must make the startup pass a no-op.
+	srv, _, _, _ := testServeStore(t, nil)
+	srv.restoreOnStart = false
+
+	makeBareRepo(t, srv.reposRoot, "a")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(srv.reposRoot, "a.git")); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.restoreMissingOnStart()
+
+	entries, err := os.ReadDir(srv.restoreDir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		entries = nil
+	}
+	if len(entries) != 0 {
+		t.Errorf("restore-on-start disabled staged %d job(s): %v", len(entries), entries)
+	}
+	if _, err := os.Stat(filepath.Join(srv.reposRoot, "a.git")); err == nil {
+		t.Error("repo a restored despite restore_on_start=false")
+	}
+}
+
+func TestRestoreMissingOnStartS3DownSkips(t *testing.T) {
+	// An unreachable objectstore must warn and skip, never block or crash the
+	// startup pass, and never disturb local repos.
+	srv, _, _, _ := testServeStore(t, nil)
+	srv.restoreOnStart = true
+	buf := captureServeLog(srv)
+	srv.mirror = mirror.New(failListStore{Store: objectstore.NewMemoryStore()}, testGit(t), srv.reposRoot, "repos", t.TempDir(), time.Now, srv.log)
+
+	makeBareRepo(t, srv.reposRoot, "a")
+
+	srv.restoreMissingOnStart()
+
+	if !strings.Contains(buf.String(), "restore-on-start skipped") {
+		t.Errorf("expected skip warning, got: %q", buf.String())
+	}
+	if strings.Contains(buf.String(), "restoring missing repo(s)") {
+		t.Errorf("summary logged despite S3-down skip: %q", buf.String())
+	}
+	if _, err := os.Stat(filepath.Join(srv.reposRoot, "a.git")); err != nil {
+		t.Errorf("local repo disturbed on S3-down skip: %v", err)
+	}
+}
+
+func TestRestoreMissingOnStartNoMissingSilent(t *testing.T) {
+	// Every S3-mirrored repo is already live on disk: nothing to restore, so
+	// no summary line and no staged jobs.
+	srv, _, _, _ := testServeStore(t, nil)
+	srv.restoreOnStart = true
+	buf := captureServeLog(srv)
+
+	makeBareRepo(t, srv.reposRoot, "a")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.restoreMissingOnStart()
+
+	if strings.Contains(buf.String(), "restoring missing repo(s)") {
+		t.Errorf("summary logged with nothing missing: %q", buf.String())
+	}
+	entries, err := os.ReadDir(srv.restoreDir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		entries = nil
+	}
+	if len(entries) != 0 {
+		t.Errorf("no-missing pass staged %d job(s): %v", len(entries), entries)
+	}
+}
+
+func TestRestoreMissingOnStartCorruptBundleLogged(t *testing.T) {
+	// A repo whose mirror is corrupt fails staging per-repo (no retry, no
+	// hot-loop): the failure is logged, and healthy repos still restore.
+	srv, _, _, store := testServeStore(t, nil)
+	srv.restoreOnStart = true
+	buf := captureServeLog(srv)
+
+	// "good": a healthy mirrored repo missing on disk -> restored.
+	makeBareRepo(t, srv.reposRoot, "good")
+	if _, err := srv.mirror.CreateBundle(context.Background(), "good"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(srv.reposRoot, "good.git")); err != nil {
+		t.Fatal(err)
+	}
+	// "bad": a corrupt bundle in S3 (fails bundle verify during staging).
+	if err := store.Put(context.Background(), "repos/bad/2026-01-01T00-00-00.000000000Z.bundle", []byte("not a git bundle")); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.restoreMissingOnStart()
+
+	if !strings.Contains(buf.String(), "restore-on-start staging failed") {
+		t.Errorf("expected per-repo staging failure log, got: %q", buf.String())
+	}
+
+	// The healthy repo still flows through the agent.
+	stopAgent := testRestoreAgent(t, srv, store)
+	defer stopAgent()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(srv.reposRoot, "good.git")); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(filepath.Join(srv.reposRoot, "good.git")); err != nil {
+		t.Errorf("healthy repo not restored alongside corrupt mirror: %v", err)
 	}
 }

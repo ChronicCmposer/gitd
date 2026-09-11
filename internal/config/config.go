@@ -58,9 +58,12 @@ type ServeConfig struct {
 	ActionsBufferSize uint8 `yaml:"actions_buffer_size"` // 0-255
 }
 
-// MirrorConfig mirrors the mirror block (R8-Q3): weekly bundle verification.
+// MirrorConfig mirrors the mirror block (R8-Q3): weekly bundle verification,
+// plus restore-on-start (re-stage a restore job for every repo that has S3
+// mirrors but is missing on disk at serve startup).
 type MirrorConfig struct {
 	VerifyInterval Duration `yaml:"verify_interval"`
+	RestoreOnStart bool     `yaml:"restore_on_start"`
 }
 
 // PoliciesConfig mirrors the policies block (R9-Q5): the enabled plugin list
@@ -118,7 +121,7 @@ func DefaultConfig() *GitdConfig {
 		Spool:            SpoolConfig{Retention: Duration(90 * 24 * time.Hour)},
 		Serve:            ServeConfig{ActionsBufferSize: 64},
 		HostAllowlist:    []string{"git.cmposer.cc", "localhost", "127.0.0.1"},
-		Mirror:           MirrorConfig{VerifyInterval: Duration(7 * 24 * time.Hour)},
+		Mirror:           MirrorConfig{VerifyInterval: Duration(7 * 24 * time.Hour), RestoreOnStart: true},
 		Policies:         PoliciesConfig{Enabled: []string{}},
 	}
 }

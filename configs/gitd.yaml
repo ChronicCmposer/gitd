@@ -32,6 +32,7 @@ serve:
 host_allowlist: [git.cmposer.cc, <EIP injected at deploy>, localhost, 127.0.0.1]   # mismatch → 400 (R8-Q5)
 mirror:
   verify_interval: 168h     # weekly bundle verification (R8-Q3)
+  restore_on_start: true    # on serve startup, stage restore jobs for S3-mirrored repos missing on disk
 policies:
   enabled: []                      # disabled by default; add "non-fast-forward" to enable, e.g. [non-fast-forward]
   non-fast-forward:                # per-policy free-form config, parsed/validated by the plugin itself

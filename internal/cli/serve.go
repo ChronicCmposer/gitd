@@ -109,6 +109,7 @@ func runServe(args []string, _, _ io.Writer) error {
 		Log:               log,
 		SweepInterval:     time.Minute,
 		VerifyInterval:    gitd.Mirror.VerifyInterval.D(),
+		RestoreOnStart:    gitd.Mirror.RestoreOnStart,
 		ActionsBufferSize: int(gitd.Serve.ActionsBufferSize),
 	})
 
