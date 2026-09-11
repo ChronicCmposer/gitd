@@ -84,6 +84,14 @@ body {
   font-feature-settings: "liga", "calt";
 }
 
+/* Hide the viewport scrollbar while keeping the page fully scrollable
+ * (wheel/trackpad/keys). Cross-browser: Firefox uses scrollbar-width,
+ * Chromium/Safari hide the root pseudo-element. The window scrollbar
+ * belongs to the root element, so html is the target that works. */
+html, body { scrollbar-width: none; }
+html::-webkit-scrollbar,
+body::-webkit-scrollbar { display: none; }
+
 /* Only 300/500 (+ italics) are shipped, so bold elements map to 500 rather
  * than a browser-synthesized 700. */
 h1, h2, h3, h4, h5, h6, strong { font-weight: 500; }
@@ -366,6 +374,26 @@ pre.blob.hljs {
   color: var(--red);
   border-radius: 3px;
   padding: 0.9rem;
+}
+
+/* Code frames: hide the horizontal scrollbar while keeping overflow-x: auto
+ * so long lines still scroll — same cross-browser technique as the page
+ * root (Firefox scrollbar-width, WebKit pseudo-element). */
+.blob-hl,
+pre.blob.hljs,
+.markdown pre,
+.diff pre,
+.blob,
+.empty-repo .hint {
+  scrollbar-width: none;
+}
+.blob-hl::-webkit-scrollbar,
+pre.blob.hljs::-webkit-scrollbar,
+.markdown pre::-webkit-scrollbar,
+.diff pre::-webkit-scrollbar,
+.blob::-webkit-scrollbar,
+.empty-repo .hint::-webkit-scrollbar {
+  display: none;
 }
 
 /* Pagination */
