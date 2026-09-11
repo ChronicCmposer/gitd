@@ -19,16 +19,23 @@ bundle into a fresh bare repo under `/srv/git`.
 `gitd mirror restore <repo>` implements exactly this order. The destination is
 **always** `/srv/git/<repo>.git` — there is no `<dest>` argument:
 
-1. **Destination must not exist.** Restore fails fast if `/srv/git/<repo>.git`
-   already exists (`mirror fetch: destination ... already exists`). You cannot
-   restore over an existing repo; no `--force` exists.
-2. **Explicit sha256 init.** A fresh bare repo is created with
+1. **Serve downloads + verifies the latest bundle** (serve has the instance
+   role + S3), stages it as `<id>.bundle` in `/var/spool/gitd/restore/`, and
+   writes the JSON job `<id>.request` for the restore agent.
+2. **The `gitd-restore` agent re-verifies the staged bundle itself** — `git
+   bundle verify` against a fresh bare-repo context (defense in depth; it
+   never trusts serve's prior verify).
+3. **Destination must not exist.** The agent's `mirror.Restore` fails fast if
+   `/srv/git/<repo>.git` already exists (`mirror fetch: destination ...
+   already exists`). You cannot restore over an existing repo; no `--force`
+   exists.
+4. **Explicit sha256 init.** A fresh bare repo is created with
    `git init --bare --object-format=sha256 <dest>` — never relies on defaults
    (R10-Q4).
-3. **Bundle verify.** The **latest** bundle is downloaded and `git bundle
+5. **Bundle verify.** The **latest** bundle is downloaded and `git bundle
    verify` runs against the fresh repo before anything is unbundled — the
    bundle's true "applies cleanly" check.
-4. **Unbundle.** `git bundle unbundle` unpacks objects and the restore
+6. **Unbundle.** `git bundle unbundle` unpacks objects and the restore
    applies the listed refs. If HEAD is dangling after unbundle (init's default
    branch differs from the bundle's), it is repointed at the first restored
    branch so the restored repo always has a resolvable HEAD. The result is
@@ -42,9 +49,12 @@ and the next push re-validates everything via `receive.fsckObjects` (R11-Q5).
 
 Get into the gitd container shell over SSH and run the mirror verbs **directly
 as admin** — there is no `sudo` in the image. `gitd mirror restore` is
-**serve-owned**: the CLI submits it over the serve socket
-(`POST /v1/restore` on `/var/spool/gitd/gitd.sock`) and the `gitd-serve`
-process, which owns `/srv/git`, performs the write:
+**serve-orchestrated**: the CLI submits it over the serve socket
+(`POST /v1/restore` on `/var/spool/gitd/gitd.sock`); serve downloads +
+verifies the bundle and stages a restore job; the **`gitd-restore` agent**
+(the `gitd mirror-agent` daemon, a background role running in its own
+container as the `git` user with no elevated caps) performs the `/srv/git`
+write:
 
 ```sh
 # Reach the admin fish shell (cert principals git,admin; R2-Q14).
@@ -53,29 +63,39 @@ ssh git@git.cmposer.cc
 gitd mirror list my-repo
 # list with no <repo> enumerates every repo that has mirrors (NDJSON):
 gitd mirror list
-# Restore is serve-owned: submit to the serve socket; serve writes /srv/git.
-# Requires gitd-serve to be running; takes no --sha256 and no dest.
+# Restore is serve-orchestrated + agent-executed: submit to the serve socket;
+# serve stages the job and the gitd-restore agent writes /srv/git as git.
+# Requires gitd-serve AND gitd-restore to be running; takes no --sha256 and
+# no dest.
 gitd mirror restore <repo>
 ```
 
 > Restore runs entirely in-container via the instance role — there is no
-> `aws` CLI in the image (R6-Q9). The `gitd-serve` process performs the
-> restore on behalf of the socket submission, so the restored repo lands
-> git-owned and the admin never needs elevation. The socket is 0770 `git:git`
-> and admin is a `git` group member, so the CLI can connect. If `gitd-serve`
-> is down, restore fails loudly (`socket ... /v1/restore` error).
+> `aws` CLI in the image (R6-Q9). The `gitd-restore` container performs the
+> restore as the `git` user (`--user 1001:1001`, `/srv/git` mounted
+> `rbind:rw`, no elevated caps), so the restored repo lands git-owned and the
+> admin never needs elevation. The socket is 0770 `git:git` and admin is a
+> `git` group member, so the CLI can connect. If `gitd-serve` is down, restore
+> fails loudly (`socket ... /v1/restore` error); if `gitd-restore` is down,
+> serve replies "restore still in progress (mirror-agent slow)" after its
+> 4m30s internal deadline and the agent completes the restore when it comes
+> back (leftovers are swept at serve's next startup).
 
 Notes:
 
 - `restore` takes exactly `<repo>` (the name, allowlist-validated) and
   restores into `/srv/git/<repo>.git` — the repo is live and recognizable,
   matching the `/srv/git/<name>.git` layout (R10-Q4).
-- Restore is serve-owned: `/srv/git` is `0755 git:git`, so the admin user
-  cannot write it directly — only the serve process (root, with
-  `CAP_DAC_OVERRIDE`) owns the store write. The bundle temp download lives
-  under `/var/spool/gitd` (existing rw mount, R5-Q4/R8-Q3).
+- Serve never writes `/srv/git` (its container mounts it `rbind:ro` and lacks
+  `CAP_CHOWN`); it stages the verified bundle + job request in
+  `/var/spool/gitd/restore/` (setgid `git`, 2770), waits up to 4m30s for the
+  agent's `<id>.result`, then removes the staged files. The agent re-verifies
+  the staged bundle and writes `/srv/git/<repo>.git` via `mirror.Restore` —
+  the destination is derived from the validated repo name, so an arbitrary
+  dest is impossible.
 - `<repo>` is validated against the repo-name allowlist
-  `[A-Za-z0-9][A-Za-z0-9._-]{0,99}` (R2-Q1).
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,99}` (R2-Q1) — by serve at the socket AND again
+  by the agent on the job (defense in depth against forged jobs).
 
 ### Verify
 

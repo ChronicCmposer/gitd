@@ -181,7 +181,7 @@ Exit codes: `0` ok, `1` runtime, `2` usage; errors to stderr as
 | Runbook | Covers |
 |---------|--------|
 | [deploy](docs/deploy.md) | prerequisites, `deploy.sh`, artifact sha256 pin + GPG provenance flow, boot/rollback, SSM access, post-boot verification |
-| [restore-from-s3](docs/restore-from-s3.md) | `gitd mirror restore <repo>` (serve-owned, `/srv/git/<repo>.git`), weekly bundle verify, repo deletion |
+| [restore-from-s3](docs/restore-from-s3.md) | `gitd mirror restore <repo>` (serve-orchestrated + gitd-restore agent, `/srv/git/<repo>.git`), weekly bundle verify, repo deletion |
 | [cert-renewal](docs/cert-renewal.md) | TLS + SSH renewal (client timer → SSM → cert-sync; host-cert via update.sh) |
 | [plugin-authoring](docs/plugin-authoring.md) | webhook `Plugin` interface, registry, http/logger, HMAC, config schema, delivery semantics |
 | [openssh-upgrade](docs/openssh-upgrade.md) | bump pin, auth-identity patch, rebuild, determinism, republish (GPG-signed), in-place update |

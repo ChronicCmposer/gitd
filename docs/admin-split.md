@@ -23,9 +23,10 @@ S3 is not an option in-container (R6-Q9). The image has **no `sudo` and no
 elevation path**: admin is a member of the `git` group (gid 1001), which
 grants read/write on the setgid `/var/spool/gitd` and connect access to the
 0770 `git:git` control socket — but never root. The only operation that must
-write `/srv/git`, `gitd mirror restore`, is **serve-owned**: the CLI submits
-it over the control socket and the `gitd-serve` process (which owns the repo
-store) performs the write.
+write `/srv/git`, `gitd mirror restore`, is **serve-orchestrated +
+agent-executed**: the CLI submits it over the control socket, serve stages a
+restore job, and the **`gitd-restore` agent** (a background container running
+as the `git` user with no elevated caps) performs the write.
 
 ```sh
 # Admin cert (principals git,admin) over the dedicated ~/.ssh/gitd_ed25519 key.
@@ -43,15 +44,19 @@ gitd mirror list
 | `gitd spool purge` | admin, direct | Remove delivered events past the retention TTL (R6-Q1, R11-Q4) |
 | `gitd mirror list [<repo>]` | admin, direct | List a repo's S3 bundles, or with no `<repo>` every repo that has mirrors — `{repo, bundles:[...]}`, one NDJSON object per repo (R13-Q6) |
 | `gitd mirror delete <repo>` | admin, direct | Delete a repo's current bundles from S3 (R6-Q9) |
-| `gitd mirror restore <repo>` | serve (socket) | Restore `<repo>` from its latest bundle into `/srv/git/<repo>.git`; serve owns `/srv/git`, so the repo lands git-owned without admin elevation (R8-Q2, R11-Q5) |
+| `gitd mirror restore <repo>` | serve + `gitd-restore` agent (socket) | Restore `<repo>` from its latest bundle into `/srv/git/<repo>.git`; serve downloads + verifies the bundle and stages the job, the gitd-restore agent (running as `git`, no elevated caps) writes `/srv/git`, so the repo lands git-owned without admin elevation (R8-Q2, R11-Q5) |
 
 > **`gitd mirror restore <repo>` is a serve socket operation.** The CLI
-> submits `POST /v1/restore` over `/var/spool/gitd/gitd.sock` and the
-> `gitd-serve` process (which owns `/srv/git`) performs the restore — the
-> same socket discipline as `gitd spool replay`. It requires `gitd-serve` to
-> be running, takes exactly `<repo>` (no dest, no `--sha256`), and always
-> restores into `/srv/git/<repo>.git`; the destination must not already exist
-> (fail-fast, no `--force`).
+> submits `POST /v1/restore` over `/var/spool/gitd/gitd.sock`; serve
+> downloads + verifies the latest bundle, stages it (as `<id>.bundle` +
+> `<id>.request`) in `/var/spool/gitd/restore/`, waits up to 4m30s for the
+> agent's `<id>.result`, then removes the staged files. The `gitd-restore`
+> container (`gitd mirror-agent`, running as `git` uid 1001, `/srv/git`
+> `rbind:rw`, **no elevated caps**) re-verifies the staged bundle and writes
+> `/srv/git/<repo>.git` via `mirror.Restore`. It requires `gitd-serve` and
+> `gitd-restore` to be running, takes exactly `<repo>` (no dest, no
+> `--sha256`), and always restores into `/srv/git/<repo>.git`; the
+> destination must not already exist (fail-fast, no `--force`).
 
 ### Plain operations in the shell (no sudo)
 
@@ -77,7 +82,8 @@ gitd mirror list
 | `pre-receive` | Pre-receive hook: strict stdin parse, statfs disk headroom, fail-closed policy engine (R9-Q7, R7-Q4, R5-Q1). |
 | `spool` | `list` / `replay <id>` / `purge` of the webhook spool; `replay` routes over the serve socket. |
 | `ddns` | Refresh the Namecheap dynamic DNS record (6h timer; reads `ddns.password_file`, root). |
-| `mirror` | `list [<repo>]` / `delete <repo>` / `restore <repo>` — `list` with no `<repo>` enumerates every mirrored repo (one NDJSON object per repo, R13-Q6); `restore` is serve-owned, socket-routed, and always targets `/srv/git/<repo>.git`. |
+| `mirror` | `list [<repo>]` / `delete <repo>` / `restore <repo>` — `list` with no `<repo>` enumerates every mirrored repo (one NDJSON object per repo, R13-Q6); `restore` is serve-orchestrated + agent-executed (serve stages the job over the socket, the `gitd-restore` agent writes `/srv/git/<repo>.git` as git). |
+| `mirror-agent` | Background daemon role (runs in the `gitd-restore` container, not an admin op): scan-then-watches `/var/spool/gitd/restore` and performs git-context restores as the `git` user. |
 | `version` | Print the link-time version string. |
 
 ## 2. Host plane: SSM Session Manager
@@ -98,10 +104,12 @@ You land as root on the AL2023 host. This is where the **host-plane** ops live:
 
 - **containerd**: `systemctl status containerd`, `ctr -n default images ls`,
   `ctr -n default image import ...` (used by the update flow).
-- **systemd units**: `systemctl status gitd-serve gitd-sshd gitd-ddns.timer
-  gitd-cert-sync.timer gitd-reboot.timer`, restart, enable. The three container
-  units (`gitd-serve`, `gitd-sshd`, `gitd-ddns`) are `After=containerd.service`
-  and `gitd-sshd` is additionally `After=gitd-serve` (R12-Q5).
+- **systemd units**: `systemctl status gitd-serve gitd-sshd gitd-restore
+  gitd-ddns.timer gitd-cert-sync.timer gitd-reboot.timer`, restart, enable.
+  The four container units (`gitd-serve`, `gitd-sshd`, `gitd-restore`,
+  `gitd-ddns`) are `After=containerd.service`; `gitd-sshd` is additionally
+  `After=gitd-serve` and `gitd-restore` is additionally `After=gitd-serve`
+  (R12-Q5).
 - **journalctl**: `journalctl -u gitd-serve`, `-u gitd-sshd`, `-u gitd-ddns`,
   `-u gitd-cert-sync.service`. In-container, the daemons' slog output goes to
   stderr → host journald (R1-Q2), so audit events (push summaries, delivery
@@ -132,15 +140,16 @@ shell; anything timed/systemd/host-OS → SSM.** Concretely:
 | Task | Plane |
 |------|-------|
 | Reply to a dead-lettered webhook | SSH → `gitd spool replay <id>` |
-| Repo restore from S3 | SSH → `gitd mirror restore <repo>` (serve socket, requires gitd-serve) |
+| Repo restore from S3 | SSH → `gitd mirror restore <repo>` (serve socket + gitd-restore agent; requires both running) |
 | Delete a repo | SSM → `rm -rf /srv/git/<repo>.git`, then SSH → `gitd mirror delete <repo>` |
 | Inspect push/delivery audit logs | SSM → `journalctl -u gitd-serve` |
+| Inspect restore audit logs | SSM → `journalctl -u gitd-serve` (staging) + `-u gitd-restore` (restore) |
 | Restart a container unit after a crash | SSM → `systemctl restart gitd-sshd` |
 | In-place image update | SSM → fetch/verify/`ctr image import`/restart (`docs/update.md`) |
 | Apply non-security host patches | SSM → `dnf update` (manual) |
 | Edit + reload configs | SSM → file edit + `ctr task kill --signal SIGHUP gitd-serve` |
 
 Remember the memory budget: `gitd-sshd` caps at 320MiB, `gitd-serve` 128MiB,
-`gitd-ddns` 64MiB on a 1GiB `t4g.micro` (R8-Q4). Keep host-plane dnf/fish
-activity light so a pathological git index-pack OOM fails cleanly instead of
-starving containerd — that bound is the point of the caps.
+`gitd-restore` 128MiB, `gitd-ddns` 64MiB on a 1GiB `t4g.micro` (R8-Q4). Keep
+host-plane dnf/fish activity light so a pathological git index-pack OOM fails
+cleanly instead of starving containerd — that bound is the point of the caps.
